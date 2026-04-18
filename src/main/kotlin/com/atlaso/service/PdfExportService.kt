@@ -75,13 +75,14 @@ class PdfExportService(
                 pages = pageRenderDataList
             )
 
-            // Save PDF via storage service
-            val pdfKey = "pdfs/${bookId}.pdf"
-            storageService.store(pdfKey, ByteArrayInputStream(pdfBytes), "application/pdf")
-            logger.info("Saved PDF for book {}", bookId)
+            // Save cover and photobook as separate PDFs
+            val coverBytes = pdfRenderer.renderCover(book.title, book.subtitle)
+            storageService.store("pdfs/${bookId}/cover.pdf", ByteArrayInputStream(coverBytes), "application/pdf")
+            storageService.store("pdfs/${bookId}/photobook.pdf", ByteArrayInputStream(pdfBytes), "application/pdf")
+            logger.info("Saved cover and photobook PDFs for book {}", bookId)
 
             // Update book
-            book.pdfUrl = pdfKey
+            book.pdfUrl = "pdfs/${bookId}/photobook.pdf"
             book.status = BookStatus.PDF_READY
             return bookRepository.save(book)
         } catch (e: Exception) {
@@ -100,7 +101,7 @@ class PdfExportService(
             throw IllegalStateException("PDF is not available for book $bookId")
         }
 
-        val bytes = storageService.load("pdfs/${bookId}.pdf")
+        val bytes = storageService.load("pdfs/${bookId}/photobook.pdf")
         val filename = "${book.title.replace(Regex("[^a-zA-Z0-9._-]"), "_")}.pdf"
         return Pair(bytes, filename)
     }

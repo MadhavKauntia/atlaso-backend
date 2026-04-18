@@ -50,6 +50,18 @@ class PdfRenderer {
         private const val MAX_IMAGE_DIMENSION = 1800  // ~150 DPI on A4, sufficient for print
     }
 
+    fun renderCover(title: String, subtitle: String?): ByteArray {
+        val document = PDDocument()
+        try {
+            renderCoverPage(document, title, subtitle)
+            val output = ByteArrayOutputStream()
+            document.save(output)
+            return output.toByteArray()
+        } finally {
+            document.close()
+        }
+    }
+
     fun render(
         title: String,
         subtitle: String?,
@@ -57,8 +69,6 @@ class PdfRenderer {
     ): ByteArray {
         val document = PDDocument()
         try {
-            renderCoverPage(document, title, subtitle)
-
             for (page in pages) {
                 renderContentPage(document, page)
             }
