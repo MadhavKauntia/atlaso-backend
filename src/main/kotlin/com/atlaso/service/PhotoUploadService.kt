@@ -122,7 +122,7 @@ class PhotoUploadService(
         try {
             Files.write(heicTemp, file.bytes)
 
-            val process = ProcessBuilder("sips", "-s", "format", "jpeg", heicTemp.toString(), "--out", jpegTemp.toString())
+            val process = ProcessBuilder("convert", heicTemp.toString(), jpegTemp.toString())
                 .redirectErrorStream(true)
                 .start()
             val completed = process.waitFor(30, TimeUnit.SECONDS)
