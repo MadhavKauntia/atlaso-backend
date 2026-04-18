@@ -1,8 +1,0 @@
-[phases.setup]
-nixPkgs = ["jdk21"]
-
-[phases.build]
-cmds = ["./gradlew bootJar --no-daemon"]
-
-[start]
-cmd = "java -jar $(find build/libs -name '*.jar' ! -name '*plain*' | head -1)"
