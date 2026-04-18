@@ -3,7 +3,10 @@ package com.atlaso.controller
 import com.atlaso.service.StorageService
 import jakarta.servlet.http.HttpServletRequest
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
+import org.springframework.http.HttpHeaders
+import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
@@ -23,5 +26,20 @@ class LocalUploadController(
         val contentType = request.contentType ?: "application/octet-stream"
         storageService.store(key, request.inputStream, contentType)
         return ResponseEntity.ok().build()
+    }
+
+    @GetMapping("/file")
+    fun serveFile(@RequestParam key: String): ResponseEntity<ByteArray> {
+        val bytes = storageService.load(key)
+        val contentType = when {
+            key.endsWith(".jpg") || key.endsWith(".jpeg") -> "image/jpeg"
+            key.endsWith(".png") -> "image/png"
+            key.endsWith(".webp") -> "image/webp"
+            else -> "application/octet-stream"
+        }
+        return ResponseEntity.ok()
+            .contentType(MediaType.parseMediaType(contentType))
+            .header(HttpHeaders.CACHE_CONTROL, "public, max-age=86400")
+            .body(bytes)
     }
 }

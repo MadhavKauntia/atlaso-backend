@@ -49,7 +49,13 @@ data class Book(
     val generatedAt: Instant? = null,
 
     @Column(name = "pdf_url", length = 1024)
-    var pdfUrl: String? = null
+    var pdfUrl: String? = null,
+
+    @Column(name = "cover_template_id", length = 64)
+    var coverTemplateId: String? = null,
+
+    @Column(name = "cover_palette_id", length = 64)
+    var coverPaletteId: String? = null
 ) {
     fun addPage(page: Page) {
         pages.add(page)

@@ -84,6 +84,15 @@ class BookGenerationService(
             .orElseThrow { BookNotFoundException(bookId) }
     }
 
+    @Transactional
+    fun saveCoverConfig(bookId: UUID, userId: UUID, templateId: String, paletteId: String): Book {
+        val book = bookRepository.findByIdAndTripUserId(bookId, userId)
+            .orElseThrow { BookNotFoundException(bookId) }
+        book.coverTemplateId = templateId
+        book.coverPaletteId = paletteId
+        return bookRepository.save(book)
+    }
+
     fun updateSlotOffset(pageId: UUID, slotIndex: Int, offsetX: Double, offsetY: Double, userId: UUID) {
         val page = pageRepository.findById(pageId)
             .orElseThrow { RuntimeException("Page not found: $pageId") }

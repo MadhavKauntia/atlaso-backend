@@ -34,9 +34,8 @@ class LocalStorageService(
     }
 
     override fun getAccessUrl(key: String, contentType: String): String {
-        val bytes = load(key)
-        val base64 = Base64.getEncoder().encodeToString(bytes)
-        return "data:$contentType;base64,$base64"
+        val encodedKey = java.net.URLEncoder.encode(key, "UTF-8")
+        return "http://localhost:8080/api/internal/file?key=$encodedKey"
     }
 
     override fun getUploadUrl(key: String, contentType: String): String {

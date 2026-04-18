@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.*
 import java.util.UUID
 
 data class SlotOffsetRequest(val offsetX: Double, val offsetY: Double)
+data class CoverConfigRequest(val templateId: String, val paletteId: String)
 
 @RestController
 @RequestMapping("/api")
@@ -58,6 +59,17 @@ class BookController(
     ): ResponseEntity<BookResponse> {
         val userId = UUID.fromString(jwt.subject)
         val book = pdfExportService.exportBook(bookId, userId)
+        return ResponseEntity.ok(BookResponse.from(book))
+    }
+
+    @PatchMapping("/books/{bookId}/cover")
+    fun saveCoverConfig(
+        @PathVariable bookId: UUID,
+        @RequestBody body: CoverConfigRequest,
+        @AuthenticationPrincipal jwt: Jwt
+    ): ResponseEntity<BookResponse> {
+        val userId = UUID.fromString(jwt.subject)
+        val book = bookGenerationService.saveCoverConfig(bookId, userId, body.templateId, body.paletteId)
         return ResponseEntity.ok(BookResponse.from(book))
     }
 

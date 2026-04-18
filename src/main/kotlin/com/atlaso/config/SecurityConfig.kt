@@ -38,6 +38,8 @@ class SecurityConfig(
                     .requestMatchers(HttpMethod.POST, "/api/auth/google").permitAll()
                     .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/trips/*/photos/*/image").permitAll()
+                    .requestMatchers(HttpMethod.GET, "/api/internal/file").permitAll()
+                    .requestMatchers(HttpMethod.PUT, "/api/internal/upload").permitAll()
                     .anyRequest().authenticated()
             }
             .oauth2ResourceServer { oauth2 ->
