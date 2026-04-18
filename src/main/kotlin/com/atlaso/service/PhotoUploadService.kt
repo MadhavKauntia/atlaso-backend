@@ -14,10 +14,8 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.multipart.MultipartFile
 import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 import java.nio.file.Files
 import java.time.Instant
-import java.time.ZoneOffset
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import javax.imageio.ImageIO
@@ -45,8 +43,8 @@ class PhotoUploadService(
         private val HEIC_CONTENT_TYPES = setOf("image/heic", "image/heif")
     }
 
-    fun uploadPhoto(tripId: UUID, file: MultipartFile): Photo {
-        val trip = tripService.getTrip(tripId)
+    fun uploadPhoto(tripId: UUID, file: MultipartFile, userId: UUID): Photo {
+        val trip = tripService.getTrip(tripId, userId)
 
         val contentType = file.contentType
             ?: throw IllegalArgumentException("File content type is required")
@@ -91,20 +89,22 @@ class PhotoUploadService(
     }
 
     @Transactional(readOnly = true)
-    fun getPhotosForTrip(tripId: UUID): List<Photo> {
-        tripService.getTrip(tripId)
+    fun getPhotosForTrip(tripId: UUID, userId: UUID): List<Photo> {
+        tripService.getTrip(tripId, userId)
         return photoRepository.findByTripId(tripId)
     }
 
     @Transactional(readOnly = true)
-    fun getPhoto(id: UUID): Photo {
-        return photoRepository.findById(id)
-            .orElseThrow { PhotoNotFoundException(id) }
+    fun getPhoto(photoId: UUID, tripId: UUID, userId: UUID): Photo {
+        tripService.getTrip(tripId, userId)
+        return photoRepository.findByIdAndTripId(photoId, tripId)
+            .orElseThrow { PhotoNotFoundException(photoId) }
     }
 
-    fun rotatePhoto(photoId: UUID, degrees: Int): Photo {
+    fun rotatePhoto(photoId: UUID, degrees: Int, tripId: UUID, userId: UUID): Photo {
         require(degrees in listOf(0, 90, 180, 270)) { "Rotation must be 0, 90, 180, or 270" }
-        val photo = photoRepository.findById(photoId)
+        tripService.getTrip(tripId, userId)
+        val photo = photoRepository.findByIdAndTripId(photoId, tripId)
             .orElseThrow { PhotoNotFoundException(photoId) }
         photo.rotation = (photo.rotation + degrees) % 360
         val saved = photoRepository.save(photo)
@@ -112,8 +112,8 @@ class PhotoUploadService(
         return saved
     }
 
-    fun initiateUploads(tripId: UUID, requests: List<InitiateUploadRequest>): List<InitiateUploadResponse> {
-        tripService.getTrip(tripId)
+    fun initiateUploads(tripId: UUID, requests: List<InitiateUploadRequest>, userId: UUID): List<InitiateUploadResponse> {
+        tripService.getTrip(tripId, userId)
         return requests.map { req ->
             if (req.contentType !in ALLOWED_CONTENT_TYPES) {
                 throw IllegalArgumentException("Unsupported file type: ${req.contentType}")
@@ -133,12 +133,11 @@ class PhotoUploadService(
         }
     }
 
-    fun confirmUploads(tripId: UUID, confirmations: List<ConfirmUploadRequest>): List<Photo> {
-        val trip = tripService.getTrip(tripId)
+    fun confirmUploads(tripId: UUID, confirmations: List<ConfirmUploadRequest>, userId: UUID): List<Photo> {
+        val trip = tripService.getTrip(tripId, userId)
         val photos = confirmations.map { conf ->
             val takenAt = conf.takenAt?.let { Instant.ofEpochMilli(it) }
             Photo(
-                id = conf.photoId,
                 trip = trip,
                 storageKey = conf.storageKey,
                 originalFilename = conf.originalFilename,
@@ -155,8 +154,9 @@ class PhotoUploadService(
         return saved
     }
 
-    fun deletePhoto(photoId: UUID) {
-        val photo = photoRepository.findById(photoId)
+    fun deletePhoto(photoId: UUID, tripId: UUID, userId: UUID) {
+        tripService.getTrip(tripId, userId)
+        val photo = photoRepository.findByIdAndTripId(photoId, tripId)
             .orElseThrow { PhotoNotFoundException(photoId) }
         storageService.delete(photo.storageKey)
         photoRepository.delete(photo)
