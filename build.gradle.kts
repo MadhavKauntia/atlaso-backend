@@ -37,6 +37,9 @@ dependencies {
 	// AWS S3
 	implementation("software.amazon.awssdk:s3:2.29.52")
 
+	// EXIF metadata extraction
+	implementation("com.drewnoakes:metadata-extractor:2.19.0")
+
 
 	// Retrofit for HTTP client
 	implementation("com.squareup.retrofit2:retrofit:2.11.0")

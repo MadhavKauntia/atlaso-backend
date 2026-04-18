@@ -4,6 +4,8 @@ import com.atlaso.domain.photo.Photo
 import com.atlaso.domain.photo.PhotoMetadata
 import com.atlaso.domain.trip.TripStatus
 import com.atlaso.repository.PhotoRepository
+import com.drew.imaging.ImageMetadataReader
+import com.drew.metadata.exif.ExifSubIFDDirectory
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -11,6 +13,7 @@ import org.springframework.web.multipart.MultipartFile
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.nio.file.Files
+import java.time.ZoneOffset
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import javax.imageio.ImageIO
@@ -139,19 +142,32 @@ class PhotoUploadService(
     }
 
     private fun extractMetadata(imageBytes: ByteArray): PhotoMetadata {
-        return try {
+        var width = 0
+        var height = 0
+        var takenAt: java.time.Instant? = null
+
+        try {
             val image = ImageIO.read(ByteArrayInputStream(imageBytes))
             if (image != null) {
-                PhotoMetadata(
-                    width = image.width,
-                    height = image.height
-                )
-            } else {
-                PhotoMetadata(width = 0, height = 0)
+                width = image.width
+                height = image.height
             }
         } catch (e: Exception) {
-            logger.warn("Failed to extract image metadata: {}", e.message)
-            PhotoMetadata(width = 0, height = 0)
+            logger.warn("Failed to read image dimensions: {}", e.message)
         }
+
+        try {
+            val exifMeta = ImageMetadataReader.readMetadata(ByteArrayInputStream(imageBytes))
+            val exif = exifMeta.getFirstDirectoryOfType(ExifSubIFDDirectory::class.java)
+            val date = exif?.getDate(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL)
+            if (date != null) {
+                takenAt = date.toInstant()
+                logger.info("Extracted EXIF takenAt: {}", takenAt)
+            }
+        } catch (e: Exception) {
+            logger.warn("Failed to extract EXIF data: {}", e.message)
+        }
+
+        return PhotoMetadata(width = width, height = height, takenAt = takenAt)
     }
 }
