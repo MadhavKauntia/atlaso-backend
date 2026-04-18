@@ -37,6 +37,13 @@ class SecurityConfig(
                 auth
                     .requestMatchers(HttpMethod.POST, "/api/auth/google").permitAll()
                     .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                    // Guest trip flow — no auth required until claim
+                    .requestMatchers(HttpMethod.POST, "/api/trips").permitAll()
+                    .requestMatchers(HttpMethod.GET, "/api/trips/*").permitAll()
+                    .requestMatchers(HttpMethod.GET, "/api/trips/*/photos").permitAll()
+                    .requestMatchers(HttpMethod.POST, "/api/trips/*/photos/initiate").permitAll()
+                    .requestMatchers(HttpMethod.POST, "/api/trips/*/photos/confirm").permitAll()
+                    // Public image/file access
                     .requestMatchers(HttpMethod.GET, "/api/trips/*/photos/*/image").permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/internal/file").permitAll()
                     .requestMatchers(HttpMethod.PUT, "/api/internal/upload").permitAll()

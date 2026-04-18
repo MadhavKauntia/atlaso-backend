@@ -19,11 +19,37 @@ class TripService(
 ) {
     private val logger = LoggerFactory.getLogger(TripService::class.java)
 
-    fun createTrip(name: String, destination: String?, userId: UUID): Trip {
-        val user = userRepository.findById(userId).orElseThrow { RuntimeException("User not found") }
-        val trip = Trip(name = name, destination = destination, user = user)
+    // Guest trip — no user yet; claimed later via claimTrip()
+    fun createTrip(name: String, destination: String?): Trip {
+        val trip = Trip(name = name, destination = destination, user = null)
         val saved = tripRepository.save(trip)
-        logger.info("Created trip: {} ({}) for user: {}", saved.id, saved.name, userId)
+        logger.info("Created guest trip: {} ({})", saved.id, saved.name)
+        return saved
+    }
+
+    // Public lookup by ID — no ownership check (used by guest flow and public endpoints)
+    fun getTrip(id: UUID): Trip {
+        return tripRepository.findById(id).orElseThrow { TripNotFoundException(id) }
+    }
+
+    // Ownership-verified lookup — used by authenticated endpoints after claim
+    fun getTrip(id: UUID, userId: UUID): Trip {
+        return tripRepository.findByIdAndUserId(id, userId)
+            .orElseThrow { TripNotFoundException(id) }
+    }
+
+    // Associate a guest trip with a logged-in user (idempotent)
+    fun claimTrip(tripId: UUID, userId: UUID): Trip {
+        val trip = tripRepository.findById(tripId).orElseThrow { TripNotFoundException(tripId) }
+        val existingUser = trip.user
+        if (existingUser != null) {
+            if (existingUser.id != userId) throw RuntimeException("Trip already belongs to another user")
+            return trip // already claimed by this user
+        }
+        val user = userRepository.findById(userId).orElseThrow { RuntimeException("User not found") }
+        trip.user = user
+        val saved = tripRepository.save(trip)
+        logger.info("Claimed trip: {} for user: {}", tripId, userId)
         return saved
     }
 
@@ -32,14 +58,6 @@ class TripService(
         return tripRepository.findAllByUserIdOrderByCreatedAtDesc(userId)
     }
 
-    @Transactional(readOnly = true)
-    fun getTrip(id: UUID, userId: UUID): Trip {
-        return tripRepository.findByIdAndUserId(id, userId)
-            .orElseThrow { TripNotFoundException(id) }
-    }
-
-    // Internal use only — ownership must have been verified upstream
-    @Transactional(readOnly = true)
     internal fun getTripById(id: UUID): Trip {
         return tripRepository.findById(id).orElseThrow { TripNotFoundException(id) }
     }

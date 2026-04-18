@@ -89,8 +89,8 @@ class PhotoUploadService(
     }
 
     @Transactional(readOnly = true)
-    fun getPhotosForTrip(tripId: UUID, userId: UUID): List<Photo> {
-        tripService.getTrip(tripId, userId)
+    fun getPhotosForTrip(tripId: UUID): List<Photo> {
+        tripService.getTrip(tripId) // verify trip exists
         return photoRepository.findByTripId(tripId)
     }
 
@@ -118,8 +118,8 @@ class PhotoUploadService(
         return saved
     }
 
-    fun initiateUploads(tripId: UUID, requests: List<InitiateUploadRequest>, userId: UUID): List<InitiateUploadResponse> {
-        tripService.getTrip(tripId, userId)
+    fun initiateUploads(tripId: UUID, requests: List<InitiateUploadRequest>): List<InitiateUploadResponse> {
+        tripService.getTrip(tripId) // verify trip exists
         return requests.map { req ->
             if (req.contentType !in ALLOWED_CONTENT_TYPES) {
                 throw IllegalArgumentException("Unsupported file type: ${req.contentType}")
@@ -139,8 +139,8 @@ class PhotoUploadService(
         }
     }
 
-    fun confirmUploads(tripId: UUID, confirmations: List<ConfirmUploadRequest>, userId: UUID): List<Photo> {
-        val trip = tripService.getTrip(tripId, userId)
+    fun confirmUploads(tripId: UUID, confirmations: List<ConfirmUploadRequest>): List<Photo> {
+        val trip = tripService.getTrip(tripId)
         val photos = confirmations.map { conf ->
             val takenAt = conf.takenAt?.let { Instant.ofEpochMilli(it) }
             Photo(

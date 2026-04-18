@@ -60,13 +60,10 @@ class PhotoController(
         return ResponseEntity.status(status).body(BulkUploadResponse(uploaded = uploaded, failed = failed))
     }
 
+    // Public — guest trips have no user; ownership enforced elsewhere after claim
     @GetMapping
-    fun getPhotos(
-        @PathVariable tripId: UUID,
-        @AuthenticationPrincipal jwt: Jwt
-    ): ResponseEntity<List<PhotoResponse>> {
-        val userId = UUID.fromString(jwt.subject)
-        val photos = photoUploadService.getPhotosForTrip(tripId, userId).map { PhotoResponse.from(it) }
+    fun getPhotos(@PathVariable tripId: UUID): ResponseEntity<List<PhotoResponse>> {
+        val photos = photoUploadService.getPhotosForTrip(tripId).map { PhotoResponse.from(it) }
         return ResponseEntity.ok(photos)
     }
 
@@ -93,25 +90,23 @@ class PhotoController(
         return ResponseEntity.noContent().build()
     }
 
+    // Public — guest uploads before login
     @PostMapping("/initiate")
     fun initiateUploads(
         @PathVariable tripId: UUID,
-        @RequestBody requests: List<InitiateUploadRequest>,
-        @AuthenticationPrincipal jwt: Jwt
+        @RequestBody requests: List<InitiateUploadRequest>
     ): ResponseEntity<List<InitiateUploadResponse>> {
-        val userId = UUID.fromString(jwt.subject)
-        val responses = photoUploadService.initiateUploads(tripId, requests, userId)
+        val responses = photoUploadService.initiateUploads(tripId, requests)
         return ResponseEntity.ok(responses)
     }
 
+    // Public — guest uploads before login
     @PostMapping("/confirm")
     fun confirmUploads(
         @PathVariable tripId: UUID,
-        @RequestBody confirmations: List<ConfirmUploadRequest>,
-        @AuthenticationPrincipal jwt: Jwt
+        @RequestBody confirmations: List<ConfirmUploadRequest>
     ): ResponseEntity<List<PhotoResponse>> {
-        val userId = UUID.fromString(jwt.subject)
-        val photos = photoUploadService.confirmUploads(tripId, confirmations, userId)
+        val photos = photoUploadService.confirmUploads(tripId, confirmations)
         return ResponseEntity.status(HttpStatus.CREATED).body(photos.map { PhotoResponse.from(it) })
     }
 

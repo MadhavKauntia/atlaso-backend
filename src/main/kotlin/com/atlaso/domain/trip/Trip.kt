@@ -27,9 +27,9 @@ data class Trip(
     @Column(name = "end_date")
     var endDate: LocalDate? = null,
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "user_id", nullable = false)
-    val user: User,
+    @ManyToOne(fetch = FetchType.LAZY, optional = true)
+    @JoinColumn(name = "user_id", nullable = true)
+    var user: User? = null,
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 50)

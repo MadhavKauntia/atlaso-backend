@@ -18,13 +18,10 @@ class TripController(
     private val tripService: TripService
 ) {
 
+    // Public — creates a guest trip with no user attached
     @PostMapping
-    fun createTrip(
-        @RequestBody request: CreateTripRequest,
-        @AuthenticationPrincipal jwt: Jwt
-    ): ResponseEntity<TripResponse> {
-        val userId = UUID.fromString(jwt.subject)
-        val trip = tripService.createTrip(request.name, request.destination, userId)
+    fun createTrip(@RequestBody request: CreateTripRequest): ResponseEntity<TripResponse> {
+        val trip = tripService.createTrip(request.name, request.destination)
         return ResponseEntity.status(HttpStatus.CREATED).body(TripResponse.from(trip))
     }
 
@@ -35,13 +32,10 @@ class TripController(
         return ResponseEntity.ok(trips)
     }
 
+    // Public — needed by cover page and upload page before login
     @GetMapping("/{id}")
-    fun getTrip(
-        @PathVariable id: UUID,
-        @AuthenticationPrincipal jwt: Jwt
-    ): ResponseEntity<TripResponse> {
-        val userId = UUID.fromString(jwt.subject)
-        val trip = tripService.getTrip(id, userId)
+    fun getTrip(@PathVariable id: UUID): ResponseEntity<TripResponse> {
+        val trip = tripService.getTrip(id)
         return ResponseEntity.ok(TripResponse.from(trip))
     }
 
@@ -53,6 +47,17 @@ class TripController(
     ): ResponseEntity<TripResponse> {
         val userId = UUID.fromString(jwt.subject)
         val trip = tripService.updateTrip(id, userId, request.name, request.destination)
+        return ResponseEntity.ok(TripResponse.from(trip))
+    }
+
+    // Requires auth — associates the guest trip with the authenticated user
+    @PostMapping("/{id}/claim")
+    fun claimTrip(
+        @PathVariable id: UUID,
+        @AuthenticationPrincipal jwt: Jwt
+    ): ResponseEntity<TripResponse> {
+        val userId = UUID.fromString(jwt.subject)
+        val trip = tripService.claimTrip(id, userId)
         return ResponseEntity.ok(TripResponse.from(trip))
     }
 }
