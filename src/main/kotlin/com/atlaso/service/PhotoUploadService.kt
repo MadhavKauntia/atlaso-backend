@@ -122,7 +122,12 @@ class PhotoUploadService(
         try {
             Files.write(heicTemp, file.bytes)
 
-            val process = ProcessBuilder("convert", heicTemp.toString(), jpegTemp.toString())
+            val isMac = System.getProperty("os.name").lowercase().contains("mac")
+            val cmd = if (isMac)
+                listOf("sips", "-s", "format", "jpeg", heicTemp.toString(), "--out", jpegTemp.toString())
+            else
+                listOf("convert", heicTemp.toString(), jpegTemp.toString())
+            val process = ProcessBuilder(cmd)
                 .redirectErrorStream(true)
                 .start()
             val completed = process.waitFor(30, TimeUnit.SECONDS)
