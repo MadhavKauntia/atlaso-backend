@@ -49,6 +49,6 @@ atlaso:
 
 logging:
   level:
-    com.atlaso: DEBUG
-    org.hibernate.SQL: DEBUG
-    okhttp3.OkHttpClient: DEBUG
+    com.atlaso: INFO
+    org.hibernate.SQL: WARN
+    okhttp3.OkHttpClient: WARN
