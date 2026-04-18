@@ -49,4 +49,11 @@ class TripService(
         trip.status = status
         return tripRepository.save(trip)
     }
+
+    fun updateTrip(id: UUID, userId: UUID, name: String?, destination: String?): Trip {
+        val trip = getTrip(id, userId)
+        name?.let { trip.name = it }
+        destination?.let { trip.destination = it }
+        return tripRepository.save(trip)
+    }
 }

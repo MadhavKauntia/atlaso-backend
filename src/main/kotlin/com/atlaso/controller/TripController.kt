@@ -10,6 +10,8 @@ import org.springframework.security.oauth2.jwt.Jwt
 import org.springframework.web.bind.annotation.*
 import java.util.UUID
 
+data class UpdateTripRequest(val name: String? = null, val destination: String? = null)
+
 @RestController
 @RequestMapping("/api/trips")
 class TripController(
@@ -40,6 +42,17 @@ class TripController(
     ): ResponseEntity<TripResponse> {
         val userId = UUID.fromString(jwt.subject)
         val trip = tripService.getTrip(id, userId)
+        return ResponseEntity.ok(TripResponse.from(trip))
+    }
+
+    @PatchMapping("/{id}")
+    fun updateTrip(
+        @PathVariable id: UUID,
+        @RequestBody request: UpdateTripRequest,
+        @AuthenticationPrincipal jwt: Jwt
+    ): ResponseEntity<TripResponse> {
+        val userId = UUID.fromString(jwt.subject)
+        val trip = tripService.updateTrip(id, userId, request.name, request.destination)
         return ResponseEntity.ok(TripResponse.from(trip))
     }
 }
