@@ -3,9 +3,9 @@ spring:
     name: atlaso-backend
 
   datasource:
-    url: jdbc:postgresql://localhost:5432/atlaso
-    username: postgres
-    password: postgres
+    url: "jdbc:postgresql://${PGHOST:localhost}:${PGPORT:5432}/${PGDATABASE:atlaso}"
+    username: "${PGUSER:postgres}"
+    password: "${PGPASSWORD:postgres}"
     driver-class-name: org.postgresql.Driver
 
   jpa:
