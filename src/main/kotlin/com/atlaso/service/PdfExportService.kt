@@ -4,23 +4,16 @@ import com.atlaso.domain.book.Book
 import com.atlaso.domain.book.BookStatus
 import com.atlaso.repository.BookRepository
 import com.atlaso.repository.PhotoRepository
-import com.fasterxml.jackson.databind.ObjectMapper
 import org.apache.pdfbox.pdmodel.PDDocument
 import org.apache.pdfbox.pdmodel.PDPage
 import org.apache.pdfbox.pdmodel.PDPageContentStream
 import org.apache.pdfbox.pdmodel.common.PDRectangle
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject
 import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
-import java.time.Duration
 import java.util.UUID
 
 @Service
@@ -31,16 +24,10 @@ class PdfExportService(
     private val photoRepository: PhotoRepository,
     private val storageService: StorageService,
     private val pdfRenderer: PdfRenderer,
-    private val objectMapper: ObjectMapper,
-    @Value("\${atlaso.frontend-url}") private val frontendUrl: String
 ) {
     private val logger = LoggerFactory.getLogger(PdfExportService::class.java)
-    private val httpClient = HttpClient.newBuilder()
-        .connectTimeout(Duration.ofSeconds(10))
-        .version(HttpClient.Version.HTTP_1_1)
-        .build()
 
-    fun exportBook(bookId: UUID, userId: UUID): Book {
+    fun exportBook(bookId: UUID, userId: UUID, coverPng: ByteArray? = null): Book {
         val book = bookGenerationService.getBookForUser(bookId, userId)
 
         if (book.status != BookStatus.READY_FOR_PREVIEW && book.status != BookStatus.FAILED && book.status != BookStatus.PDF_READY) {
@@ -92,7 +79,7 @@ class PdfExportService(
                 pages = pageRenderDataList
             )
 
-            val coverPdfBytes = buildCoverPdf(book)
+            val coverPdfBytes = buildCoverPdf(book, coverPng)
 
             storageService.store("pdfs/${bookId}/cover.pdf", ByteArrayInputStream(coverPdfBytes), "application/pdf")
             storageService.store("pdfs/${bookId}/photobook.pdf", ByteArrayInputStream(contentPdfBytes), "application/pdf")
@@ -109,58 +96,11 @@ class PdfExportService(
         }
     }
 
-    private fun buildCoverPdf(book: Book): ByteArray {
-        val templateId = book.coverTemplateId
-        val paletteId  = book.coverPaletteId
-
-        // If the user chose a cover template, fetch the PNG from the frontend export API
-        if (templateId != null && paletteId != null) {
-            try {
-                val pngBytes = fetchCoverPng(
-                    templateId = templateId,
-                    paletteId  = paletteId,
-                    title      = book.title,
-                    subtitle   = book.subtitle ?: "",
-                    volumeNumber = book.version
-                )
-                return wrapPngInPdf(pngBytes)
-            } catch (e: Exception) {
-                logger.warn("Cover PNG fetch failed ({}), falling back to plain cover", e.message)
-            }
+    private fun buildCoverPdf(book: Book, coverPng: ByteArray?): ByteArray {
+        if (coverPng != null) {
+            return wrapPngInPdf(coverPng)
         }
-
-        // Fallback: plain text cover
         return pdfRenderer.renderCover(book.title, book.subtitle)
-    }
-
-    private fun fetchCoverPng(
-        templateId: String,
-        paletteId: String,
-        title: String,
-        subtitle: String,
-        volumeNumber: Int
-    ): ByteArray {
-        val body = objectMapper.writeValueAsString(
-            mapOf(
-                "templateId"   to templateId,
-                "paletteId"    to paletteId,
-                "title"        to title,
-                "subtitle"     to subtitle,
-                "volumeNumber" to volumeNumber
-            )
-        )
-        val request = HttpRequest.newBuilder()
-            .uri(URI.create("$frontendUrl/api/covers/export?format=png"))
-            .timeout(Duration.ofSeconds(30))
-            .header("Content-Type", "application/json")
-            .POST(HttpRequest.BodyPublishers.ofString(body))
-            .build()
-
-        val response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray())
-        if (response.statusCode() != 200) {
-            throw RuntimeException("Cover export API returned ${response.statusCode()}")
-        }
-        return response.body()
     }
 
     /** Wraps a single PNG image into a single-page PDF sized to match the image's natural dimensions. */

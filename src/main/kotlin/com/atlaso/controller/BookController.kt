@@ -14,6 +14,7 @@ import java.util.UUID
 
 data class SlotOffsetRequest(val offsetX: Double, val offsetY: Double)
 data class CoverConfigRequest(val templateId: String, val paletteId: String)
+data class ExportBookRequest(val coverImageBase64: String?)
 
 @RestController
 @RequestMapping("/api")
@@ -55,10 +56,12 @@ class BookController(
     @PostMapping("/books/{bookId}/export")
     fun exportBook(
         @PathVariable bookId: UUID,
+        @RequestBody(required = false) body: ExportBookRequest?,
         @AuthenticationPrincipal jwt: Jwt
     ): ResponseEntity<BookResponse> {
         val userId = UUID.fromString(jwt.subject)
-        val book = pdfExportService.exportBook(bookId, userId)
+        val coverPng = body?.coverImageBase64?.let { java.util.Base64.getDecoder().decode(it) }
+        val book = pdfExportService.exportBook(bookId, userId, coverPng)
         return ResponseEntity.ok(BookResponse.from(book))
     }
 
