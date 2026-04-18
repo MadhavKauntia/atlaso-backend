@@ -13,6 +13,7 @@ import software.amazon.awssdk.services.s3.model.GetObjectRequest
 import software.amazon.awssdk.services.s3.model.PutObjectRequest
 import software.amazon.awssdk.services.s3.presigner.S3Presigner
 import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest
+import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest
 import java.io.InputStream
 import java.time.Duration
 
@@ -71,6 +72,19 @@ class S3StorageService(
             )
             .build()
         return presigner.presignGetObject(presignRequest).url().toString()
+    }
+
+    override fun getUploadUrl(key: String, contentType: String): String {
+        val putRequest = PutObjectRequest.builder()
+            .bucket(config.bucketName)
+            .key(key)
+            .contentType(contentType)
+            .build()
+        val presignRequest = PutObjectPresignRequest.builder()
+            .signatureDuration(Duration.ofHours(1))
+            .putObjectRequest(putRequest)
+            .build()
+        return presigner.presignPutObject(presignRequest).url().toString()
     }
 
     override fun delete(key: String) {

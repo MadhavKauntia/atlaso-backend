@@ -9,6 +9,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.nio.file.StandardCopyOption
+import java.net.URLEncoder
 import java.util.Base64
 
 @Service
@@ -36,6 +37,11 @@ class LocalStorageService(
         val bytes = load(key)
         val base64 = Base64.getEncoder().encodeToString(bytes)
         return "data:$contentType;base64,$base64"
+    }
+
+    override fun getUploadUrl(key: String, contentType: String): String {
+        val encodedKey = URLEncoder.encode(key, "UTF-8")
+        return "http://localhost:8080/api/internal/upload?key=$encodedKey"
     }
 
     override fun delete(key: String) {

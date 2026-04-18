@@ -1,5 +1,8 @@
 package com.atlaso.service
 
+import com.atlaso.controller.dto.ConfirmUploadRequest
+import com.atlaso.controller.dto.InitiateUploadRequest
+import com.atlaso.controller.dto.InitiateUploadResponse
 import com.atlaso.domain.photo.Photo
 import com.atlaso.domain.photo.PhotoMetadata
 import com.atlaso.domain.trip.TripStatus
@@ -13,6 +16,7 @@ import org.springframework.web.multipart.MultipartFile
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.nio.file.Files
+import java.time.Instant
 import java.time.ZoneOffset
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -105,6 +109,49 @@ class PhotoUploadService(
         photo.rotation = (photo.rotation + degrees) % 360
         val saved = photoRepository.save(photo)
         logger.info("Rotated photo {} to {}°", photoId, saved.rotation)
+        return saved
+    }
+
+    fun initiateUploads(tripId: UUID, requests: List<InitiateUploadRequest>): List<InitiateUploadResponse> {
+        tripService.getTrip(tripId)
+        return requests.map { req ->
+            if (req.contentType !in ALLOWED_CONTENT_TYPES) {
+                throw IllegalArgumentException("Unsupported file type: ${req.contentType}")
+            }
+            val ext = when (req.contentType) {
+                "image/jpeg" -> "jpg"
+                "image/png" -> "png"
+                "image/webp" -> "webp"
+                "image/heic" -> "heic"
+                "image/heif" -> "heif"
+                else -> req.filename.substringAfterLast('.', "jpg")
+            }
+            val photoId = UUID.randomUUID()
+            val storageKey = "$tripId/$photoId.$ext"
+            val uploadUrl = storageService.getUploadUrl(storageKey, req.contentType)
+            InitiateUploadResponse(photoId = photoId, storageKey = storageKey, uploadUrl = uploadUrl)
+        }
+    }
+
+    fun confirmUploads(tripId: UUID, confirmations: List<ConfirmUploadRequest>): List<Photo> {
+        val trip = tripService.getTrip(tripId)
+        val photos = confirmations.map { conf ->
+            val takenAt = conf.takenAt?.let { Instant.ofEpochMilli(it) }
+            Photo(
+                id = conf.photoId,
+                trip = trip,
+                storageKey = conf.storageKey,
+                originalFilename = conf.originalFilename,
+                contentType = conf.contentType,
+                fileSize = conf.fileSize,
+                metadata = PhotoMetadata(width = conf.width, height = conf.height, takenAt = takenAt)
+            )
+        }
+        val saved = photoRepository.saveAll(photos)
+        logger.info("Confirmed {} uploads for trip {}", saved.size, tripId)
+        if (trip.status == TripStatus.CREATED) {
+            tripService.updateStatus(tripId, TripStatus.UPLOADING_PHOTOS)
+        }
         return saved
     }
 

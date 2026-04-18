@@ -6,6 +6,29 @@ import com.atlaso.domain.photo.PhotoSignals
 import java.time.Instant
 import java.util.UUID
 
+data class InitiateUploadRequest(
+    val filename: String,
+    val contentType: String,
+    val fileSize: Long
+)
+
+data class InitiateUploadResponse(
+    val photoId: UUID,
+    val storageKey: String,
+    val uploadUrl: String
+)
+
+data class ConfirmUploadRequest(
+    val photoId: UUID,
+    val storageKey: String,
+    val originalFilename: String,
+    val contentType: String,
+    val fileSize: Long,
+    val width: Int,
+    val height: Int,
+    val takenAt: Long?
+)
+
 data class BulkUploadResponse(
     val uploaded: List<PhotoResponse>,
     val failed: List<BulkUploadFailure>

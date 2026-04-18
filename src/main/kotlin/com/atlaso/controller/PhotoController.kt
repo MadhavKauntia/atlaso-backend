@@ -2,6 +2,9 @@ package com.atlaso.controller
 
 import com.atlaso.controller.dto.BulkUploadFailure
 import com.atlaso.controller.dto.BulkUploadResponse
+import com.atlaso.controller.dto.ConfirmUploadRequest
+import com.atlaso.controller.dto.InitiateUploadRequest
+import com.atlaso.controller.dto.InitiateUploadResponse
 import com.atlaso.controller.dto.PhotoResponse
 import com.atlaso.service.PhotoUploadService
 import com.atlaso.service.StorageService
@@ -74,6 +77,24 @@ class PhotoController(
     ): ResponseEntity<Void> {
         photoUploadService.deletePhoto(photoId)
         return ResponseEntity.noContent().build()
+    }
+
+    @PostMapping("/initiate")
+    fun initiateUploads(
+        @PathVariable tripId: UUID,
+        @RequestBody requests: List<InitiateUploadRequest>
+    ): ResponseEntity<List<InitiateUploadResponse>> {
+        val responses = photoUploadService.initiateUploads(tripId, requests)
+        return ResponseEntity.ok(responses)
+    }
+
+    @PostMapping("/confirm")
+    fun confirmUploads(
+        @PathVariable tripId: UUID,
+        @RequestBody confirmations: List<ConfirmUploadRequest>
+    ): ResponseEntity<List<PhotoResponse>> {
+        val photos = photoUploadService.confirmUploads(tripId, confirmations)
+        return ResponseEntity.status(HttpStatus.CREATED).body(photos.map { PhotoResponse.from(it) })
     }
 
     @GetMapping("/{photoId}/image")
