@@ -189,32 +189,41 @@ class PhotoSelector(
             scorePhoto(photo, weights, sceneTypeCounts, timeOfDayCounts)
         }.sortedByDescending { it.totalScore }
 
-        // Iteratively select photos
+        // Pass 1: diversity-constrained selection
+        val skippedByQuota = mutableListOf<Photo>()
         while (selected.size < diversityConfig.targetPhotos && scoredPhotos.isNotEmpty()) {
             val nextPhoto = scoredPhotos.first()
             val signals = nextPhoto.photo.signals!!
 
-            // Check if we've hit scene type cap
             val sceneCount = sceneTypeCounts[signals.sceneType] ?: 0
             val sceneTarget = sceneTargets[signals.sceneType] ?: 3
 
             if (sceneCount < sceneTarget) {
-                // Add photo
                 selected.add(nextPhoto.photo)
                 sceneTypeCounts[signals.sceneType] = sceneCount + 1
                 timeOfDayCounts[signals.timeOfDay] = (timeOfDayCounts[signals.timeOfDay] ?: 0) + 1
 
                 logger.debug("Selected photo ${nextPhoto.photo.id} (score: ${nextPhoto.totalScore}, scene: ${signals.sceneType})")
 
-                // Re-score remaining photos with updated counts
                 scoredPhotos = scoredPhotos.drop(1).map { photoScore ->
                     scorePhoto(photoScore.photo, weights, sceneTypeCounts, timeOfDayCounts)
                 }.sortedByDescending { it.totalScore }
             } else {
-                // Skip this photo, it would exceed scene type quota
-                logger.debug("Skipped photo ${nextPhoto.photo.id} (quota reached for ${signals.sceneType})")
+                logger.debug("Deferred photo ${nextPhoto.photo.id} (quota reached for ${signals.sceneType})")
+                skippedByQuota.add(nextPhoto.photo)
                 scoredPhotos = scoredPhotos.drop(1)
             }
+        }
+
+        // Pass 2: fill remaining slots with best skipped photos when target scene types were absent
+        if (selected.size < diversityConfig.targetPhotos && skippedByQuota.isNotEmpty()) {
+            val remaining = diversityConfig.targetPhotos - selected.size
+            val fillPhotos = skippedByQuota
+                .map { scorePhoto(it, weights, sceneTypeCounts, timeOfDayCounts) }
+                .sortedByDescending { it.totalScore }
+                .take(remaining)
+            fillPhotos.forEach { logger.debug("Fill-selected photo ${it.photo.id} (scene: ${it.photo.signals?.sceneType})") }
+            selected.addAll(fillPhotos.map { it.photo })
         }
 
         return selected
