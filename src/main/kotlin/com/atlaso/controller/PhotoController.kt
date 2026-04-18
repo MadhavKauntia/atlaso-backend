@@ -5,6 +5,7 @@ import com.atlaso.controller.dto.BulkUploadResponse
 import com.atlaso.controller.dto.PhotoResponse
 import com.atlaso.service.PhotoUploadService
 import com.atlaso.service.StorageService
+import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
@@ -79,11 +80,11 @@ class PhotoController(
     fun getPhotoImage(
         @PathVariable tripId: UUID,
         @PathVariable photoId: UUID
-    ): ResponseEntity<ByteArray> {
+    ): ResponseEntity<Void> {
         val photo = photoUploadService.getPhoto(photoId)
-        val bytes = storageService.load(photo.storageKey)
-        return ResponseEntity.ok()
-            .contentType(MediaType.parseMediaType(photo.contentType))
-            .body(bytes)
+        val url = storageService.getAccessUrl(photo.storageKey, photo.contentType)
+        return ResponseEntity.status(HttpStatus.FOUND)
+            .header(HttpHeaders.LOCATION, url)
+            .build()
     }
 }
