@@ -1,0 +1,52 @@
+spring:
+  application:
+    name: atlaso-backend
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/atlaso
+    username: postgres
+    password: postgres
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        jdbc:
+          lob:
+            non_contextual_creation: true
+
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 100MB
+
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    deserialization:
+      fail-on-unknown-properties: false
+
+# OpenAI API Configuration
+openai:
+  api:
+    key: "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"
+    model: gpt-4o-mini
+    base-url: https://api.openai.com/v1/
+
+atlaso:
+  storage:
+    local:
+      base-path: ./uploads/photos
+    pdf:
+      base-path: ./uploads/pdfs
+
+logging:
+  level:
+    com.atlaso: DEBUG
+    org.hibernate.SQL: DEBUG
+    okhttp3.OkHttpClient: DEBUG
