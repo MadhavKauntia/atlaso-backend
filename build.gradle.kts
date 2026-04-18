@@ -34,6 +34,9 @@ dependencies {
 	// PDF generation
 	implementation("org.apache.pdfbox:pdfbox:3.0.3")
 
+	// AWS S3
+	implementation("software.amazon.awssdk:s3:2.29.52")
+
 
 	// Retrofit for HTTP client
 	implementation("com.squareup.retrofit2:retrofit:2.11.0")

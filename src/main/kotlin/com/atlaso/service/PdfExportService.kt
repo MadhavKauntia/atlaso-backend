@@ -1,6 +1,5 @@
 package com.atlaso.service
 
-import com.atlaso.config.PdfStorageConfig
 import com.atlaso.domain.book.Book
 import com.atlaso.domain.book.BookStatus
 import com.atlaso.repository.BookRepository
@@ -8,8 +7,7 @@ import com.atlaso.repository.PhotoRepository
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
-import java.nio.file.Files
-import java.nio.file.Paths
+import java.io.ByteArrayInputStream
 import java.util.UUID
 
 @Service
@@ -19,8 +17,7 @@ class PdfExportService(
     private val bookGenerationService: BookGenerationService,
     private val photoRepository: PhotoRepository,
     private val storageService: StorageService,
-    private val pdfRenderer: PdfRenderer,
-    private val pdfStorageConfig: PdfStorageConfig
+    private val pdfRenderer: PdfRenderer
 ) {
     private val logger = LoggerFactory.getLogger(PdfExportService::class.java)
 
@@ -78,15 +75,13 @@ class PdfExportService(
                 pages = pageRenderDataList
             )
 
-            // Save PDF to disk
-            val pdfDir = Paths.get(pdfStorageConfig.basePath)
-            Files.createDirectories(pdfDir)
-            val pdfPath = pdfDir.resolve("${bookId}.pdf")
-            Files.write(pdfPath, pdfBytes)
-            logger.info("Saved PDF for book {} at {}", bookId, pdfPath)
+            // Save PDF via storage service
+            val pdfKey = "pdfs/${bookId}.pdf"
+            storageService.store(pdfKey, ByteArrayInputStream(pdfBytes), "application/pdf")
+            logger.info("Saved PDF for book {}", bookId)
 
             // Update book
-            book.pdfUrl = "pdfs/${bookId}.pdf"
+            book.pdfUrl = pdfKey
             book.status = BookStatus.PDF_READY
             return bookRepository.save(book)
         } catch (e: Exception) {
@@ -105,8 +100,7 @@ class PdfExportService(
             throw IllegalStateException("PDF is not available for book $bookId")
         }
 
-        val pdfPath = Paths.get(pdfStorageConfig.basePath).resolve("${bookId}.pdf")
-        val bytes = Files.readAllBytes(pdfPath)
+        val bytes = storageService.load("pdfs/${bookId}.pdf")
         val filename = "${book.title.replace(Regex("[^a-zA-Z0-9._-]"), "_")}.pdf"
         return Pair(bytes, filename)
     }

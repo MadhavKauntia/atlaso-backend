@@ -2,6 +2,7 @@ package com.atlaso.service
 
 import com.atlaso.config.StorageConfig
 import org.slf4j.LoggerFactory
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.stereotype.Service
 import java.io.InputStream
 import java.nio.file.Files
@@ -11,6 +12,7 @@ import java.nio.file.StandardCopyOption
 import java.util.Base64
 
 @Service
+@ConditionalOnProperty(name = ["atlaso.storage.type"], havingValue = "local", matchIfMissing = true)
 class LocalStorageService(
     private val storageConfig: StorageConfig
 ) : StorageService {

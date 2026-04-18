@@ -1,7 +1,6 @@
-Clear all data from the Atlaso database and delete all uploaded files.
+Clear all data from the Atlaso database.
 
-Run these two commands:
+Run this command:
 1. `/opt/homebrew/opt/libpq/bin/psql -U postgres -d atlaso -c "TRUNCATE photos, pages, books, trips RESTART IDENTITY CASCADE;"`
-2. `rm -rf /Users/madhavkauntia/Desktop/atlaso-backend/uploads`
 
-Then confirm both succeeded.
+Then confirm it succeeded. Note: S3 files must be cleared manually via the AWS console if needed.

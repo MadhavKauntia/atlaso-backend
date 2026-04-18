@@ -34,16 +34,18 @@ spring:
 # OpenAI API Configuration
 openai:
   api:
-    key: "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"
+    key: "${OPENAI_API_KEY}"
     model: gpt-4o-mini
     base-url: https://api.openai.com/v1/
 
 atlaso:
   storage:
+    type: "${STORAGE_TYPE:local}"
     local:
-      base-path: ./uploads/photos
-    pdf:
-      base-path: ./uploads/pdfs
+      base-path: ./uploads
+    s3:
+      bucket-name: "${S3_BUCKET_NAME:}"
+      region: "${AWS_REGION:us-east-1}"
 
 logging:
   level:
