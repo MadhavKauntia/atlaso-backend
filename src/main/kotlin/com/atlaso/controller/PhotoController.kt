@@ -118,11 +118,9 @@ class PhotoController(
     @GetMapping("/{photoId}/image")
     fun getPhotoImage(
         @PathVariable tripId: UUID,
-        @PathVariable photoId: UUID,
-        @AuthenticationPrincipal jwt: Jwt
+        @PathVariable photoId: UUID
     ): ResponseEntity<Void> {
-        val userId = UUID.fromString(jwt.subject)
-        val photo = photoUploadService.getPhoto(photoId, tripId, userId)
+        val photo = photoUploadService.getPhotoByTripAndId(photoId, tripId)
         val url = storageService.getAccessUrl(photo.storageKey, photo.contentType)
         return ResponseEntity.status(HttpStatus.FOUND)
             .header(HttpHeaders.LOCATION, url)

@@ -101,6 +101,12 @@ class PhotoUploadService(
             .orElseThrow { PhotoNotFoundException(photoId) }
     }
 
+    @Transactional(readOnly = true)
+    fun getPhotoByTripAndId(photoId: UUID, tripId: UUID): Photo {
+        return photoRepository.findByIdAndTripId(photoId, tripId)
+            .orElseThrow { PhotoNotFoundException(photoId) }
+    }
+
     fun rotatePhoto(photoId: UUID, degrees: Int, tripId: UUID, userId: UUID): Photo {
         require(degrees in listOf(0, 90, 180, 270)) { "Rotation must be 0, 90, 180, or 270" }
         tripService.getTrip(tripId, userId)
