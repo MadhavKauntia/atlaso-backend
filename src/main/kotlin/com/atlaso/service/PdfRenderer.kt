@@ -47,6 +47,7 @@ class PdfRenderer {
         private const val CAPTION_FONT_SIZE = 8f
         private const val TITLE_FONT_SIZE = 32f
         private const val SUBTITLE_FONT_SIZE = 18f
+        private const val MAX_IMAGE_DIMENSION = 1800  // ~150 DPI on A4, sufficient for print
     }
 
     fun render(
@@ -177,13 +178,27 @@ class PdfRenderer {
     private fun loadImage(document: PDDocument, bytes: ByteArray, userRotation: Int): PDImageXObject {
         val exifDegrees = readJpegExifOrientation(bytes)
         val totalDegrees = (exifDegrees + userRotation) % 360
-        if (totalDegrees == 0) {
-            return PDImageXObject.createFromByteArray(document, bytes, "photo")
-        }
+
         val original = ImageIO.read(ByteArrayInputStream(bytes))
             ?: return PDImageXObject.createFromByteArray(document, bytes, "photo")
-        val rotated = rotateBufferedImage(original, totalDegrees)
-        return JPEGFactory.createFromImage(document, rotated, 0.88f)
+
+        val resized = resizeIfNeeded(original)
+        val processed = if (totalDegrees != 0) rotateBufferedImage(resized, totalDegrees) else resized
+        return JPEGFactory.createFromImage(document, processed, 0.88f)
+    }
+
+    private fun resizeIfNeeded(image: BufferedImage): BufferedImage {
+        val maxDim = maxOf(image.width, image.height)
+        if (maxDim <= MAX_IMAGE_DIMENSION) return image
+        val scale = MAX_IMAGE_DIMENSION.toDouble() / maxDim
+        val newW = (image.width * scale).toInt()
+        val newH = (image.height * scale).toInt()
+        val resized = BufferedImage(newW, newH, BufferedImage.TYPE_INT_RGB)
+        val g = resized.createGraphics()
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+        g.drawImage(image, 0, 0, newW, newH, null)
+        g.dispose()
+        return resized
     }
 
     /**
