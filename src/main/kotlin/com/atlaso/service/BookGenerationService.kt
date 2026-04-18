@@ -29,27 +29,22 @@ class BookGenerationService(
 ) {
     private val logger = LoggerFactory.getLogger(BookGenerationService::class.java)
 
-    fun generateBook(tripId: UUID): Book {
-        val trip = tripService.getTrip(tripId)
+    fun generateBook(tripId: UUID, userId: UUID): Book {
+        val trip = tripService.getTrip(tripId, userId)
 
-        // Analyze any unanalyzed photos
         photoAnalysisService.analyzeUnanalyzedPhotos(tripId)
 
-        // Get all analyzed photos
         val analyzedPhotos = photoRepository.findByTripIdAndSignalsIsNotNull(tripId)
         if (analyzedPhotos.isEmpty()) {
             throw NoPhotosAvailableException(tripId)
         }
 
-        // Select best photos
         val selectionResult = photoSelector.selectPhotosForBook(analyzedPhotos)
         logger.info("Selected {} photos for book", selectionResult.photos.size)
 
-        // Determine version
         val existingBooks = bookRepository.findByTripIdOrderByVersionDesc(tripId)
         val nextVersion = (existingBooks.firstOrNull()?.version ?: 0) + 1
 
-        // Create book
         val book = Book(
             trip = trip,
             version = nextVersion,
@@ -59,7 +54,6 @@ class BookGenerationService(
             status = BookStatus.GENERATING
         )
 
-        // Generate layout
         val pages = layoutEngine.generatePages(selectionResult.photos)
         pages.forEach { page -> book.addPage(page) }
 
@@ -67,26 +61,35 @@ class BookGenerationService(
         val saved = bookRepository.save(book)
         logger.info("Generated book: {} (v{}) with {} pages", saved.id, saved.version, saved.pages.size)
 
-        // Update trip status
         tripService.updateStatus(tripId, TripStatus.BOOK_GENERATED)
 
         return saved
     }
 
-    fun regenerateBook(bookId: UUID): Book {
-        val existingBook = getBook(bookId)
-        return generateBook(existingBook.trip.id!!)
+    fun regenerateBook(bookId: UUID, userId: UUID): Book {
+        val existingBook = getBookForUser(bookId, userId)
+        return generateBook(existingBook.trip.id!!, userId)
     }
 
     @Transactional(readOnly = true)
-    fun getBook(bookId: UUID): Book {
+    fun getBookForUser(bookId: UUID, userId: UUID): Book {
+        return bookRepository.findByIdAndTripUserId(bookId, userId)
+            .orElseThrow { BookNotFoundException(bookId) }
+    }
+
+    // Internal use only — called by PdfExportService after ownership is already verified at controller level
+    @Transactional(readOnly = true)
+    internal fun getBook(bookId: UUID): Book {
         return bookRepository.findById(bookId)
             .orElseThrow { BookNotFoundException(bookId) }
     }
 
-    fun updateSlotOffset(pageId: UUID, slotIndex: Int, offsetX: Double, offsetY: Double) {
+    fun updateSlotOffset(pageId: UUID, slotIndex: Int, offsetX: Double, offsetY: Double, userId: UUID) {
         val page = pageRepository.findById(pageId)
             .orElseThrow { RuntimeException("Page not found: $pageId") }
+        if (page.book?.trip?.user?.id != userId) {
+            throw RuntimeException("Page not found: $pageId")
+        }
         require(slotIndex in page.slots.indices) { "Slot index $slotIndex out of range" }
         val updatedSlots = page.slots.toMutableList()
         updatedSlots[slotIndex] = updatedSlots[slotIndex].copy(

@@ -2,6 +2,7 @@ package com.atlaso.repository
 
 import com.atlaso.domain.photo.Photo
 import org.springframework.data.jpa.repository.JpaRepository
+import java.util.Optional
 import java.util.UUID
 
 interface PhotoRepository : JpaRepository<Photo, UUID> {
@@ -9,4 +10,5 @@ interface PhotoRepository : JpaRepository<Photo, UUID> {
     fun findByTripIdAndSignalsIsNull(tripId: UUID): List<Photo>
     fun findByTripIdAndSignalsIsNotNull(tripId: UUID): List<Photo>
     fun countByTripId(tripId: UUID): Long
+    fun findByIdAndTripId(id: UUID, tripId: UUID): Optional<Photo>
 }

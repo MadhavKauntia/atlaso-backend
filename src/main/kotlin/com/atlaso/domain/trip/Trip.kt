@@ -1,5 +1,6 @@
 package com.atlaso.domain.trip
 
+import com.atlaso.domain.user.User
 import jakarta.persistence.*
 import org.hibernate.annotations.CreationTimestamp
 import org.hibernate.annotations.UpdateTimestamp
@@ -25,6 +26,10 @@ data class Trip(
 
     @Column(name = "end_date")
     var endDate: LocalDate? = null,
+
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "user_id", nullable = false)
+    val user: User,
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 50)

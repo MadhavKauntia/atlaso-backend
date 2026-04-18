@@ -2,6 +2,7 @@ package com.atlaso.controller
 
 import com.atlaso.controller.dto.ErrorResponse
 import com.atlaso.service.BookNotFoundException
+import com.atlaso.service.InvalidGoogleTokenException
 import com.atlaso.service.NoPhotosAvailableException
 import com.atlaso.service.PhotoNotFoundException
 import com.atlaso.service.TripNotFoundException
@@ -36,6 +37,11 @@ class GlobalExceptionHandler {
     @ExceptionHandler(NoPhotosAvailableException::class)
     fun handleNoPhotos(ex: NoPhotosAvailableException, request: HttpServletRequest): ResponseEntity<ErrorResponse> {
         return buildResponse(HttpStatus.BAD_REQUEST, ex.message, request)
+    }
+
+    @ExceptionHandler(InvalidGoogleTokenException::class)
+    fun handleInvalidGoogleToken(ex: InvalidGoogleTokenException, request: HttpServletRequest): ResponseEntity<ErrorResponse> {
+        return buildResponse(HttpStatus.UNAUTHORIZED, ex.message, request)
     }
 
     @ExceptionHandler(IllegalArgumentException::class)

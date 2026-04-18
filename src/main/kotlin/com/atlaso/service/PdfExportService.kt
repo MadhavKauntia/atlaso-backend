@@ -21,8 +21,8 @@ class PdfExportService(
 ) {
     private val logger = LoggerFactory.getLogger(PdfExportService::class.java)
 
-    fun exportBook(bookId: UUID): Book {
-        val book = bookGenerationService.getBook(bookId)
+    fun exportBook(bookId: UUID, userId: UUID): Book {
+        val book = bookGenerationService.getBookForUser(bookId, userId)
 
         if (book.status != BookStatus.READY_FOR_PREVIEW && book.status != BookStatus.FAILED && book.status != BookStatus.PDF_READY) {
             throw IllegalStateException(
@@ -35,7 +35,6 @@ class PdfExportService(
         bookRepository.save(book)
 
         try {
-            // Build render data for each page
             val pageRenderDataList = book.pages.map { page ->
                 val slotDataList = page.slots.map { slot ->
                     val photo = try {
@@ -68,20 +67,17 @@ class PdfExportService(
                 )
             }
 
-            // Render PDF
             val pdfBytes = pdfRenderer.render(
                 title = book.title,
                 subtitle = book.subtitle,
                 pages = pageRenderDataList
             )
 
-            // Save cover and photobook as separate PDFs
             val coverBytes = pdfRenderer.renderCover(book.title, book.subtitle)
             storageService.store("pdfs/${bookId}/cover.pdf", ByteArrayInputStream(coverBytes), "application/pdf")
             storageService.store("pdfs/${bookId}/photobook.pdf", ByteArrayInputStream(pdfBytes), "application/pdf")
             logger.info("Saved cover and photobook PDFs for book {}", bookId)
 
-            // Update book
             book.pdfUrl = "pdfs/${bookId}/photobook.pdf"
             book.status = BookStatus.PDF_READY
             return bookRepository.save(book)
@@ -94,8 +90,8 @@ class PdfExportService(
     }
 
     @Transactional(readOnly = true)
-    fun loadPdf(bookId: UUID): Pair<ByteArray, String> {
-        val book = bookGenerationService.getBook(bookId)
+    fun loadPdf(bookId: UUID, userId: UUID): Pair<ByteArray, String> {
+        val book = bookGenerationService.getBookForUser(bookId, userId)
 
         if (book.pdfUrl == null || book.status != BookStatus.PDF_READY) {
             throw IllegalStateException("PDF is not available for book $bookId")
