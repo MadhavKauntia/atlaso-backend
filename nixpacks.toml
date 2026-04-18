@@ -1,0 +1,8 @@
+[phases.setup]
+nixPkgs = ["jdk21"]
+
+[phases.build]
+cmds = ["./gradlew bootJar --no-daemon"]
+
+[start]
+cmd = "java -jar build/libs/atlaso-backend-0.0.1-SNAPSHOT.jar"
