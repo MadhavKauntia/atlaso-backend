@@ -3,6 +3,7 @@ package com.atlaso.service
 import com.atlaso.controller.dto.ConfirmUploadRequest
 import com.atlaso.controller.dto.InitiateUploadRequest
 import com.atlaso.controller.dto.InitiateUploadResponse
+import com.atlaso.domain.photo.GeoLocation
 import com.atlaso.domain.photo.Photo
 import com.atlaso.domain.photo.PhotoMetadata
 import com.atlaso.domain.trip.TripStatus
