@@ -9,6 +9,7 @@ import com.atlaso.domain.trip.TripStatus
 import com.atlaso.repository.PhotoRepository
 import com.drew.imaging.ImageMetadataReader
 import com.drew.metadata.exif.ExifSubIFDDirectory
+import com.drew.metadata.exif.GpsDirectory
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -203,6 +204,7 @@ class PhotoUploadService(
         var width = 0
         var height = 0
         var takenAt: java.time.Instant? = null
+        var location: GeoLocation? = null
 
         try {
             val image = ImageIO.read(ByteArrayInputStream(imageBytes))
@@ -222,10 +224,16 @@ class PhotoUploadService(
                 takenAt = date.toInstant()
                 logger.info("Extracted EXIF takenAt: {}", takenAt)
             }
+            val gps = exifMeta.getFirstDirectoryOfType(GpsDirectory::class.java)
+            val rawGeo = gps?.geoLocation
+            if (rawGeo != null) {
+                location = GeoLocation(rawGeo.latitude, rawGeo.longitude)
+                logger.info("Extracted GPS: {}, {}", rawGeo.latitude, rawGeo.longitude)
+            }
         } catch (e: Exception) {
             logger.warn("Failed to extract EXIF data: {}", e.message)
         }
 
-        return PhotoMetadata(width = width, height = height, takenAt = takenAt)
+        return PhotoMetadata(width = width, height = height, takenAt = takenAt, location = location)
     }
 }
