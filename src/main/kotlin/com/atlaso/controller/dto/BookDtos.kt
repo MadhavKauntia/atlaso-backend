@@ -19,7 +19,6 @@ data class BookResponse(
     val coverPaletteId: String?,
     val status: BookStatus,
     val generatedAt: Instant?,
-    val pdfUrl: String?,
     val pages: List<PageResponse>
 ) {
     companion object {
@@ -34,7 +33,6 @@ data class BookResponse(
             coverPaletteId = book.coverPaletteId,
             status = book.status,
             generatedAt = book.generatedAt,
-            pdfUrl = book.pdfUrl,
             pages = book.pages.map { PageResponse.from(it) }
         )
     }
