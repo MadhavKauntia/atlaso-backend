@@ -43,8 +43,14 @@ class PhotoSelector(
         logger.info("After burst deduplication: ${dedupedPhotos.size} photos")
         log.add("After burst deduplication: ${dedupedPhotos.size} photos (removed ${qualityPhotos.size - dedupedPhotos.size})")
 
-        // Phase 3 & 4: Scoring + Diversity Selection
-        val selectedPhotos = selectPhotos(dedupedPhotos, scoringWeights, diversityConfig)
+        // Phase 3: Adaptive selection — keep all photos up to 96 (24 pages × 4 per page max).
+        // Above 96, apply diversity scoring to pick the best spread.
+        val maxPhotos = 96
+        val selectedPhotos = if (dedupedPhotos.size <= maxPhotos) {
+            dedupedPhotos
+        } else {
+            selectPhotos(dedupedPhotos, scoringWeights, diversityConfig.copy(targetPhotos = maxPhotos))
+        }
         logger.info("Final selection: ${selectedPhotos.size} photos")
         log.add("Final selection: ${selectedPhotos.size} photos")
 
