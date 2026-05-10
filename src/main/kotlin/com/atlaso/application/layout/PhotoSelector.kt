@@ -57,8 +57,15 @@ class PhotoSelector(
                 log.add("Only ${dedupedPhotos.size} photos after quality filter; relaxing constraints to reach $minPhotos pages")
                 logger.info("Below minimum page count; falling back to dedup-only selection")
                 val fallback = dedupeBursts(photos, burstConfig)
-                if (fallback.size <= maxPhotos) fallback
-                else selectPhotos(fallback, scoringWeights, diversityConfig.copy(targetPhotos = maxPhotos))
+                val fallbackPhotos = if (fallback.size >= minPhotos) {
+                    fallback
+                } else {
+                    log.add("Only ${fallback.size} photos after burst dedup; using all analyzed photos")
+                    logger.info("Still below minimum after dedup-only fallback; using all analyzed photos")
+                    photos.filter { it.signals != null }
+                }
+                if (fallbackPhotos.size <= maxPhotos) fallbackPhotos
+                else selectPhotos(fallbackPhotos, scoringWeights, diversityConfig.copy(targetPhotos = maxPhotos))
             }
         }
         logger.info("Final selection: ${selectedPhotos.size} photos")

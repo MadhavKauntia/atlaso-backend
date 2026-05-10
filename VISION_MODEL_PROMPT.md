@@ -12,7 +12,13 @@ Analyze the image and return ONLY this exact JSON structure:
   "blur_score": <float 0.0-1.0>,
   "faces_count": <integer>,
   "scene_type": <one of: "people", "landscape", "food", "city", "misc">,
-  "time_of_day": <one of: "day", "golden_hour", "night">
+  "time_of_day": <one of: "day", "golden_hour", "night">,
+  "dominant_colors": [<array of 2-4 hex color strings, most dominant first, e.g. "#3a7bd5">],
+  "detected_objects": [<array of strings naming key objects visible, e.g. "mountain", "table", "sunset">],
+  "color_temperature": <one of: "warm", "cool", "neutral">,
+  "mood": <one of: "joyful", "serene", "dramatic", "adventurous">,
+  "depth_of_field": <one of: "shallow", "deep">,
+  "location_tag": <one of: "beach", "mountain", "forest", "lake", "waterfall", "desert", "park", "restaurant", "cafe", "market", "hotel", "airport", "city_street", "historical_site", "museum", "temple", "viewpoint", "indoor_venue", "boat", "other">
 }
 
 Rules:
@@ -21,6 +27,12 @@ Rules:
 - faces_count: number of human faces visible
 - scene_type: primary subject of the photo
 - time_of_day: lighting conditions
+- dominant_colors: 2-4 most prominent colors as hex codes
+- detected_objects: 3-6 key objects or subjects visible in the photo
+- color_temperature: overall warmth of the photo's color palette
+- mood: emotional tone of the image
+- depth_of_field: shallow = blurred background with isolated subject; deep = everything in focus
+- location_tag: the type of place or setting depicted; choose the single best match
 
 Return ONLY the JSON. No markdown. No explanations. No code blocks.
 ```

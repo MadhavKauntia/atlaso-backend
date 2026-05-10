@@ -35,7 +35,10 @@ data class PhotoAnalysisResponse(
     val mood: String = "serene",
 
     @JsonProperty("depth_of_field")
-    val depthOfField: String = "deep"
+    val depthOfField: String = "deep",
+
+    @JsonProperty("location_tag")
+    val locationTag: String? = null
 ) {
     init {
         require(aestheticScore in 0.0..1.0) { "aesthetic_score must be between 0.0 and 1.0" }

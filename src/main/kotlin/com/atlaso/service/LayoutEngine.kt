@@ -29,6 +29,7 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
         var pageNumber = 1
 
         for (group in groups) {
+            if (group.photos.isEmpty()) continue
             val layout = chooseLayout(group)
             val ordered = orderSlotsForLayout(group.photos, layout)
             pages.add(createPage(pageNumber++, layout, ordered))

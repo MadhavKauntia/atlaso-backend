@@ -13,5 +13,6 @@ data class PhotoSignals(
     val dominantColors: List<String> = emptyList(),
     val colorTemperature: String = "neutral",
     val mood: String = "serene",
-    val depthOfField: String = "deep"
+    val depthOfField: String = "deep",
+    val locationTag: String? = null
 ) : Serializable

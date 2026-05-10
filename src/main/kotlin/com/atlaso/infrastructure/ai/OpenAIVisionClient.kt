@@ -32,7 +32,8 @@ Analyze the image and return ONLY this exact JSON structure:
   "detected_objects": [<array of strings naming key objects visible, e.g. "mountain", "table", "sunset">],
   "color_temperature": <one of: "warm", "cool", "neutral">,
   "mood": <one of: "joyful", "serene", "dramatic", "adventurous">,
-  "depth_of_field": <one of: "shallow", "deep">
+  "depth_of_field": <one of: "shallow", "deep">,
+  "location_tag": <one of: "beach", "mountain", "forest", "lake", "waterfall", "desert", "park", "restaurant", "cafe", "market", "hotel", "airport", "city_street", "historical_site", "museum", "temple", "viewpoint", "indoor_venue", "boat", "other">
 }
 
 Rules:
@@ -46,6 +47,7 @@ Rules:
 - color_temperature: overall warmth of the photo's color palette
 - mood: emotional tone of the image
 - depth_of_field: shallow = blurred background with isolated subject; deep = everything in focus
+- location_tag: the type of place or setting depicted; choose the single best match
 
 Return ONLY the JSON. No markdown. No explanations. No code blocks."""
     }
@@ -68,7 +70,7 @@ Return ONLY the JSON. No markdown. No explanations. No code blocks."""
                     )
                 )
             ),
-            maxTokens = 400,
+            maxTokens = 500,
             temperature = 0.3
         )
 

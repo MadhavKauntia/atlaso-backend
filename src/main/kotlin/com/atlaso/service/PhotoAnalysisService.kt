@@ -57,7 +57,8 @@ class PhotoAnalysisService(
             detectedObjects = response.detectedObjects,
             colorTemperature = response.colorTemperature,
             mood = response.mood,
-            depthOfField = response.depthOfField
+            depthOfField = response.depthOfField,
+            locationTag = response.locationTag
         )
     }
 }
