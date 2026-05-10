@@ -2,6 +2,7 @@ package com.atlaso.controller
 
 import com.atlaso.controller.dto.CreateTripRequest
 import com.atlaso.controller.dto.TripResponse
+import com.atlaso.domain.trip.TripStatus
 import com.atlaso.service.TripService
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
@@ -68,6 +69,17 @@ class TripController(
     ): ResponseEntity<TripResponse> {
         val userId = UUID.fromString(jwt.subject)
         val trip = tripService.claimTrip(id, userId)
+        return ResponseEntity.ok(TripResponse.from(trip))
+    }
+
+    @PostMapping("/{id}/order")
+    fun markOrdered(
+        @PathVariable id: UUID,
+        @AuthenticationPrincipal jwt: Jwt
+    ): ResponseEntity<TripResponse> {
+        val userId = UUID.fromString(jwt.subject)
+        tripService.getTrip(id, userId) // validates ownership
+        val trip = tripService.updateStatus(id, TripStatus.ORDERED)
         return ResponseEntity.ok(TripResponse.from(trip))
     }
 }
