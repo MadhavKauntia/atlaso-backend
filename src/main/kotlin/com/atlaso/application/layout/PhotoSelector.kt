@@ -60,9 +60,9 @@ class PhotoSelector(
                 val fallbackPhotos = if (fallback.size >= minPhotos) {
                     fallback
                 } else {
-                    log.add("Only ${fallback.size} photos after burst dedup; using all analyzed photos")
-                    logger.info("Still below minimum after dedup-only fallback; using all analyzed photos")
-                    photos.filter { it.signals != null }
+                    log.add("Only ${fallback.size} photos after burst dedup; using all uploaded photos")
+                    logger.info("Still below minimum after dedup-only fallback; using all uploaded photos")
+                    photos
                 }
                 if (fallbackPhotos.size <= maxPhotos) fallbackPhotos
                 else selectPhotos(fallbackPhotos, scoringWeights, diversityConfig.copy(targetPhotos = maxPhotos))
@@ -261,7 +261,11 @@ class PhotoSelector(
         sceneTypeCounts: Map<String?, Int>,
         timeOfDayCounts: Map<String?, Int>
     ): PhotoScore {
-        val signals = photo.signals!!
+        val signals = photo.signals ?: return PhotoScore(
+            photo = photo,
+            totalScore = 0.0,
+            breakdown = ScoreBreakdown(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        )
         val metadata = photo.metadata
 
         // 1. Aesthetic Score (0.0 - 1.0)
