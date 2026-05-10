@@ -77,6 +77,13 @@ class BookGenerationService(
             .orElseThrow { BookNotFoundException(bookId) }
     }
 
+    @Transactional(readOnly = true)
+    fun getLatestBookByTripId(tripId: UUID, userId: UUID): Book {
+        val books = bookRepository.findByTripIdOrderByVersionDesc(tripId)
+        return books.firstOrNull { it.trip.user?.id == userId }
+            ?: throw BookNotFoundException(tripId)
+    }
+
     // Internal use only — called by PdfExportService after ownership is already verified at controller level
     @Transactional(readOnly = true)
     internal fun getBook(bookId: UUID): Book {

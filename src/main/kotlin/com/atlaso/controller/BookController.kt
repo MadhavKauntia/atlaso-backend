@@ -33,6 +33,16 @@ class BookController(
         return ResponseEntity.status(HttpStatus.CREATED).body(BookResponse.from(book))
     }
 
+    @GetMapping("/trips/{tripId}/book")
+    fun getLatestBookForTrip(
+        @PathVariable tripId: UUID,
+        @AuthenticationPrincipal jwt: Jwt
+    ): ResponseEntity<BookResponse> {
+        val userId = UUID.fromString(jwt.subject)
+        val book = bookGenerationService.getLatestBookByTripId(tripId, userId)
+        return ResponseEntity.ok(BookResponse.from(book))
+    }
+
     @GetMapping("/books/{bookId}")
     fun getBook(
         @PathVariable bookId: UUID,
