@@ -45,11 +45,21 @@ class PhotoSelector(
 
         // Phase 3: Adaptive selection — keep all photos up to 96 (24 pages × 4 per page max).
         // Above 96, apply diversity scoring to pick the best spread.
+        // If quality filter + dedup dropped us below 24, relax: skip quality filter and dedup again.
         val maxPhotos = 96
-        val selectedPhotos = if (dedupedPhotos.size <= maxPhotos) {
-            dedupedPhotos
-        } else {
-            selectPhotos(dedupedPhotos, scoringWeights, diversityConfig.copy(targetPhotos = maxPhotos))
+        val minPhotos = 24
+        val selectedPhotos = when {
+            dedupedPhotos.size >= maxPhotos ->
+                selectPhotos(dedupedPhotos, scoringWeights, diversityConfig.copy(targetPhotos = maxPhotos))
+            dedupedPhotos.size >= minPhotos ->
+                dedupedPhotos
+            else -> {
+                log.add("Only ${dedupedPhotos.size} photos after quality filter; relaxing constraints to reach $minPhotos pages")
+                logger.info("Below minimum page count; falling back to dedup-only selection")
+                val fallback = dedupeBursts(photos, burstConfig)
+                if (fallback.size <= maxPhotos) fallback
+                else selectPhotos(fallback, scoringWeights, diversityConfig.copy(targetPhotos = maxPhotos))
+            }
         }
         logger.info("Final selection: ${selectedPhotos.size} photos")
         log.add("Final selection: ${selectedPhotos.size} photos")
