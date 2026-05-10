@@ -50,6 +50,16 @@ class TripController(
         return ResponseEntity.ok(TripResponse.from(trip))
     }
 
+    @DeleteMapping("/{id}")
+    fun deleteTrip(
+        @PathVariable id: UUID,
+        @AuthenticationPrincipal jwt: Jwt
+    ): ResponseEntity<Void> {
+        val userId = UUID.fromString(jwt.subject)
+        tripService.deleteTrip(id, userId)
+        return ResponseEntity.noContent().build()
+    }
+
     // Requires auth — associates the guest trip with the authenticated user
     @PostMapping("/{id}/claim")
     fun claimTrip(

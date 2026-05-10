@@ -74,4 +74,10 @@ class TripService(
         destination?.let { trip.destination = it }
         return tripRepository.save(trip)
     }
+
+    fun deleteTrip(id: UUID, userId: UUID) {
+        val trip = getTrip(id, userId)
+        tripRepository.delete(trip)
+        logger.info("Deleted trip: {} for user: {}", id, userId)
+    }
 }
