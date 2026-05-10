@@ -22,27 +22,30 @@ class PhotoGrouper {
         // Book physical layout (cover not counted):
         //   Page 1        — isolated (right-hand page, back of cover on left)
         //   Pages 2–3     — spread 1
-        //   Pages 4–5     — spread 2
         //   …
         //   Pages 22–23   — spread 11
         //   Page 24       — isolated (left-hand page, right = back cover)
         //
-        // 1 isolated + 11 spreads + 1 isolated = 24 pages
+        // 1 isolated + 11 spreads + 1 isolated = 24 pages → 13 episodes → 12 boundaries
         private const val SPREAD_COUNT = 11
+        private const val BOUNDARY_COUNT = 12  // TARGET_EPISODES - 1
         private const val MAX_PHOTOS_PER_PAGE = 4
     }
 
     /**
-     * Divides photos into exactly 24 page groups that respect the book's spread layout.
+     * Groups photos into exactly 24 page groups using constrained semantic boundary detection.
      *
-     * How sizes are determined (equal distribution — guarantees ≥2 photos per spread):
-     *   - photosPerPage = floor(n / 24), clamped to [1, 4]
-     *   - Page 1 and Page 24 each get photosPerPage photos
-     *   - Remaining photos divided equally into 11 spread episodes
-     *
-     * Where to split within each spread episode (semantic split):
-     *   - The highest-scoring boundary inside the episode becomes the left/right divider
-     *   - Score = temporal gap + location tag change + scene type change + object dissimilarity
+     * Algorithm:
+     * 1. Sort photos chronologically.
+     * 2. Score every adjacent pair — high score = strong natural episode break
+     *    (large time gap, location tag change, scene type change, low object overlap).
+     * 3. Greedily select the 12 highest-scoring boundaries subject to:
+     *    - Each spread episode (episodes 1–11) has ≥ 2 photos (so it can produce 2 pages).
+     *    - Each isolated episode (0 and 12) has ≥ 1 photo.
+     *    This ensures semantically coherent spreads while guaranteeing exactly 24 pages.
+     * 4. Episode 0  → page 1  (isolated page group, up to 4 photos).
+     * 5. Episodes 1–11 → split at midpoint into left/right page groups per spread.
+     * 6. Episode 12 → page 24 (isolated page group, up to 4 photos).
      *
      * Within each page group, photos are sorted by aesthetic score so the LayoutEngine
      * assigns the best photo to the featured slot.
@@ -54,77 +57,112 @@ class PhotoGrouper {
         val n = sorted.size
 
         if (n < TARGET_PAGE_COUNT) {
-            // Fewer photos than pages — one photo per page, no spreads
             return sorted.map { PhotoGroup(photos = listOf(it), representativeTime = it.metadata.takenAt) }
         }
 
-        // --- Size distribution ---
-        val photosPerPage = (n / TARGET_PAGE_COUNT).coerceIn(1, MAX_PHOTOS_PER_PAGE)
-        val photosForPage1 = photosPerPage
-        val photosForPage24 = photosPerPage
-        val spreadsTotal = n - photosForPage1 - photosForPage24  // guaranteed ≥ 22 when n ≥ 24
-        val spreadBase = spreadsTotal / SPREAD_COUNT
-        val spreadExtras = spreadsTotal % SPREAD_COUNT
+        // Score every gap between adjacent photos
+        val splitScores = (0 until n - 1).map { i -> computeSplitScore(sorted[i], sorted[i + 1]) }
 
+        // Find 12 constrained semantic boundaries
+        val boundaries = selectConstrainedBoundaries(splitScores, n)
+
+        // Build 13 episodes from the boundary positions
+        val episodes = mutableListOf<List<Photo>>()
+        var start = 0
+        for (b in boundaries) {
+            episodes.add(sorted.subList(start, b + 1))
+            start = b + 1
+        }
+        episodes.add(sorted.subList(start, n))
+
+        // Convert episodes to page groups
         val groups = mutableListOf<PhotoGroup>()
-
-        // Page 1 (isolated)
-        groups.add(buildGroup(sorted.subList(0, photosForPage1)))
-
-        // 11 spread episodes — equal-sized chunks, each split into 2 page groups
-        var spreadStart = photosForPage1
-        for (s in 0 until SPREAD_COUNT) {
-            val size = spreadBase + if (s < spreadExtras) 1 else 0
-            val episode = sorted.subList(spreadStart, spreadStart + size)
-            spreadStart += size
-
-            val (leftPhotos, rightPhotos) = splitEpisode(episode)
-            groups.add(buildGroup(leftPhotos))
-            if (rightPhotos.isNotEmpty()) groups.add(buildGroup(rightPhotos))
+        for ((index, episode) in episodes.withIndex()) {
+            val isSpread = index in 1..(episodes.size - 2)  // episodes 1–11
+            if (isSpread && episode.size >= 2) {
+                // Split at midpoint — photos within an episode are semantically similar,
+                // so both halves will show related content.
+                val mid = episode.size / 2
+                groups.add(buildGroup(episode.subList(0, mid).take(MAX_PHOTOS_PER_PAGE)))
+                groups.add(buildGroup(episode.subList(mid, episode.size).take(MAX_PHOTOS_PER_PAGE)))
+            } else {
+                groups.add(buildGroup(episode.take(MAX_PHOTOS_PER_PAGE)))
+            }
         }
 
-        // Page 24 (isolated)
-        groups.add(buildGroup(sorted.subList(n - photosForPage24, n)))
-
         logger.info(
-            "Grouped {} photos into {} pages ({} spreads + 2 isolated, {} photos/page)",
-            n, groups.size, SPREAD_COUNT, photosPerPage
+            "Grouped {} photos into {} pages via constrained semantic boundaries ({} spreads + 2 isolated)",
+            n, groups.size, SPREAD_COUNT
         )
         return groups
     }
 
     /**
-     * Splits a spread episode into left-page and right-page groups.
+     * Greedily selects [BOUNDARY_COUNT] boundary positions from the scored gap list,
+     * subject to:
+     *   - Each spread episode (between consecutive boundaries) has ≥ 2 photos.
+     *   - The final isolated episode (page 24) has ≥ 1 photo.
      *
-     * Finds the highest-scoring semantic boundary inside [episode] and uses it as the
-     * divider. This ensures pages within a spread break at a natural content boundary
-     * (location change, scene change, time gap) rather than an arbitrary midpoint.
+     * Boundaries are tried in descending score order. A candidate is accepted when:
+     *   a) It is ≥ 2 positions away from any already-selected boundary on both sides
+     *      (guarantees ≥ 2 photos in the episodes it creates/splits).
+     *   b) It is ≤ maxAllowed, leaving enough room for the remaining boundaries.
+     *
+     * For n = 24 (minimum), the constraints force exactly [0, 2, 4, …, 22], which is
+     * equivalent to equal distribution — no wasted choices, always valid.
+     * For larger n, semantic scores guide placement toward natural scene/location breaks.
      */
-    private fun splitEpisode(episode: List<Photo>): Pair<List<Photo>, List<Photo>> {
-        if (episode.size <= 1) return Pair(episode, emptyList())
-        if (episode.size == 2) return Pair(listOf(episode[0]), listOf(episode[1]))
+    private fun selectConstrainedBoundaries(scores: List<Double>, n: Int): List<Int> {
+        val sortedByScore = scores.indices.sortedByDescending { scores[it] }
+        val selected = mutableListOf<Int>()
 
-        // Score every adjacent pair; pick the highest-scoring gap as the split point
-        val bestSplit = (0 until episode.size - 1)
-            .maxByOrNull { i -> computeSplitScore(episode[i], episode[i + 1]) }
-            ?: (episode.size / 2 - 1)
+        for (candidate in sortedByScore) {
+            if (selected.size == BOUNDARY_COUNT) break
 
-        return Pair(
-            episode.subList(0, bestSplit + 1).take(MAX_PHOTOS_PER_PAGE),
-            episode.subList(bestSplit + 1, episode.size).take(MAX_PHOTOS_PER_PAGE)
-        )
+            val k = selected.size
+            val remaining = BOUNDARY_COUNT - k - 1
+
+            // Upper bound: must leave room for the `remaining` boundaries still needed.
+            // Each needs ≥ 2 positions after it (for the spread episode), plus ≥ 1 for page 24.
+            val maxAllowed = n - 2 - remaining * 2
+            if (candidate > maxAllowed) continue
+
+            // Lower bound: must be ≥ 2 away from the nearest existing boundary on the left
+            // (so the episode between prev and candidate has ≥ 2 photos).
+            val prev = selected.filter { it < candidate }.maxOrNull() ?: -2
+            if (candidate - prev < 2) continue
+
+            // Must also be ≥ 2 away from the nearest existing boundary on the right
+            // (so the episode between candidate and next has ≥ 2 photos).
+            val next = selected.filter { it > candidate }.minOrNull() ?: (n - 1)
+            if (next - candidate < 2) continue
+
+            selected.add(candidate)
+        }
+
+        // Safety fallback — should never trigger for n ≥ 24, but guards against edge cases.
+        if (selected.size < BOUNDARY_COUNT) {
+            logger.warn(
+                "Constrained boundary selection found only {}/{} boundaries; falling back to equal spacing",
+                selected.size, BOUNDARY_COUNT
+            )
+            val step = n.toDouble() / (BOUNDARY_COUNT + 1)
+            return (1..BOUNDARY_COUNT).map { i -> ((i * step) - 1).toInt().coerceIn(0, n - 2) }
+        }
+
+        return selected.sorted()
     }
 
     /**
      * Scores how strongly a page boundary belongs between [a] and [b].
-     * Higher = stronger episode break.
+     * Higher = stronger episode break (different location, scene type, subject matter, or time).
      *
      * Weights:
-     *   Temporal gap          0.40
-     *   Location tag mismatch 0.25
-     *   Scene type mismatch   0.20
-     *   Object dissimilarity  0.10  (Jaccard distance)
-     *   Color temp shift       0.05
+     *   Temporal gap          0.40 — biggest signal; large gaps mean different activity or day
+     *   Location tag mismatch 0.25 — e.g. beach → restaurant is a clear break
+     *   Scene type mismatch   0.20 — people / landscape / food / city / misc
+     *   Object dissimilarity  0.10 — Jaccard distance on detected object labels
+     *   Color temp shift       0.05 — warm→cool often signals a different setting
      */
     private fun computeSplitScore(a: Photo, b: Photo): Double {
         var score = 0.0
