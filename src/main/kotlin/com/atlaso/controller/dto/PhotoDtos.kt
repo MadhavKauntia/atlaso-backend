@@ -26,7 +26,9 @@ data class ConfirmUploadRequest(
     val fileSize: Long,
     val width: Int,
     val height: Int,
-    val takenAt: Long?
+    val takenAt: Long?,
+    val latitude: Double? = null,
+    val longitude: Double? = null
 )
 
 data class BulkUploadResponse(

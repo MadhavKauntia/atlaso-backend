@@ -151,7 +151,13 @@ class PhotoUploadService(
                 originalFilename = conf.originalFilename,
                 contentType = conf.contentType,
                 fileSize = conf.fileSize,
-                metadata = PhotoMetadata(width = conf.width, height = conf.height, takenAt = takenAt)
+                metadata = PhotoMetadata(
+                    width = conf.width,
+                    height = conf.height,
+                    takenAt = takenAt,
+                    location = if (conf.latitude != null && conf.longitude != null)
+                        GeoLocation(conf.latitude, conf.longitude) else null
+                )
             )
         }
         val saved = photoRepository.saveAll(photos)
