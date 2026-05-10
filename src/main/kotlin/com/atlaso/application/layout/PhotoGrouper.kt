@@ -53,7 +53,12 @@ class PhotoGrouper {
     fun group(photos: List<Photo>, targetPages: Int = TARGET_PAGE_COUNT): List<PhotoGroup> {
         if (photos.isEmpty()) return emptyList()
 
-        val sorted = photos.sortedWith(compareBy(nullsLast()) { it.metadata.takenAt })
+        // Primary: takenAt ascending, nulls last.
+        // Secondary: originalFilename — iPhone files are named IMG_NNNN sequentially,
+        // so filename order approximates shooting order when EXIF timestamps are absent.
+        val sorted = photos
+            .sortedBy { it.originalFilename }
+            .sortedWith(compareBy(nullsLast()) { it.metadata.takenAt })
         val n = sorted.size
 
         if (n < TARGET_PAGE_COUNT) {
@@ -78,7 +83,8 @@ class PhotoGrouper {
         // Convert episodes to page groups
         val groups = mutableListOf<PhotoGroup>()
         for ((index, episode) in episodes.withIndex()) {
-            val isSpread = index in 1..(episodes.size - 2)  // episodes 1–11
+            val isIsolated = index == 0 || index == episodes.size - 1
+            val isSpread = !isIsolated  // episodes 1–11
             if (isSpread && episode.size >= 2) {
                 // Split at midpoint — photos within an episode are semantically similar,
                 // so both halves will show related content.
@@ -86,7 +92,11 @@ class PhotoGrouper {
                 groups.add(buildGroup(episode.subList(0, mid).take(MAX_PHOTOS_PER_PAGE)))
                 groups.add(buildGroup(episode.subList(mid, episode.size).take(MAX_PHOTOS_PER_PAGE)))
             } else {
-                groups.add(buildGroup(episode.take(MAX_PHOTOS_PER_PAGE)))
+                // Isolated pages (page 1 and page 24): use exactly 1 photo.
+                // A single HERO image looks better, and avoids placing two unrelated
+                // photos together when the episode's photos don't share a common theme.
+                val limit = if (isIsolated) 1 else MAX_PHOTOS_PER_PAGE
+                groups.add(buildGroup(episode.take(limit)))
             }
         }
 
