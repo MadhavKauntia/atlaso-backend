@@ -4,7 +4,7 @@ Start the full Atlaso stack locally: Spring Boot backend + Next.js frontend.
 
 1. Start the backend in the background:
 ```bash
-cd /Users/madhavkauntia/Desktop/atlaso-backend && AWS_ACCESS_KEY_ID=AKIAZTJQZHW6O74QGSHK AWS_SECRET_ACCESS_KEY=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 ./gradlew bootRun --args='--spring.profiles.active=local' > /tmp/atlaso-backend.log 2>&1 &
+cd /Users/madhavkauntia/Desktop/atlaso-backend && AWS_ACCESS_KEY_ID=YOUR_AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY=YOUR_AWS_SECRET_ACCESS_KEY ./gradlew bootRun --args='--spring.profiles.active=local' > /tmp/atlaso-backend.log 2>&1 &
 ```
 
 2. Wait for the backend to be ready (polls until port 8080 responds):
