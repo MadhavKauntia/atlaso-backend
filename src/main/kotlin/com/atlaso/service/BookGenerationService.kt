@@ -116,4 +116,28 @@ class BookGenerationService(
         pageRepository.save(updatedPage)
         logger.info("Updated slot {}/{} offset to ({}, {})", pageId, slotIndex, offsetX, offsetY)
     }
+
+    fun updateSlotPhoto(pageId: UUID, slotIndex: Int, photoId: UUID, userId: UUID) {
+        val page = pageRepository.findById(pageId)
+            .orElseThrow { RuntimeException("Page not found: $pageId") }
+        val trip = page.book?.trip
+        if (trip?.user?.id != userId) {
+            throw RuntimeException("Page not found: $pageId")
+        }
+        require(slotIndex in page.slots.indices) { "Slot index $slotIndex out of range" }
+        // The replacement photo must belong to the same trip.
+        photoRepository.findByIdAndTripId(photoId, trip.id!!)
+            .orElseThrow { PhotoNotFoundException(photoId) }
+        val updatedSlots = page.slots.toMutableList()
+        // New image gets fresh framing: recenter the crop and drop any rotation.
+        updatedSlots[slotIndex] = updatedSlots[slotIndex].copy(
+            photoId = photoId,
+            offsetX = null,
+            offsetY = null,
+            rotation = 0
+        )
+        val updatedPage = page.copy(slots = updatedSlots)
+        pageRepository.save(updatedPage)
+        logger.info("Replaced slot {}/{} photo with {}", pageId, slotIndex, photoId)
+    }
 }

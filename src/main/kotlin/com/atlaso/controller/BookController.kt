@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.*
 import java.util.UUID
 
 data class SlotOffsetRequest(val offsetX: Double, val offsetY: Double)
+data class SlotPhotoRequest(val photoId: UUID)
 data class CoverConfigRequest(val templateId: String, val paletteId: String)
 data class ExportBookRequest(val coverImageBase64: String?)
 
@@ -95,6 +96,18 @@ class BookController(
     ): ResponseEntity<Void> {
         val userId = UUID.fromString(jwt.subject)
         bookGenerationService.updateSlotOffset(pageId, slotIndex, body.offsetX, body.offsetY, userId)
+        return ResponseEntity.noContent().build()
+    }
+
+    @PatchMapping("/pages/{pageId}/slots/{slotIndex}/photo")
+    fun updateSlotPhoto(
+        @PathVariable pageId: UUID,
+        @PathVariable slotIndex: Int,
+        @RequestBody body: SlotPhotoRequest,
+        @AuthenticationPrincipal jwt: Jwt
+    ): ResponseEntity<Void> {
+        val userId = UUID.fromString(jwt.subject)
+        bookGenerationService.updateSlotPhoto(pageId, slotIndex, body.photoId, userId)
         return ResponseEntity.noContent().build()
     }
 
