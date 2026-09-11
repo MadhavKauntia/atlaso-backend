@@ -43,3 +43,7 @@ out/
 
 ### Uploads ###
 uploads/
+
+### Env ###
+.env
+.env.*

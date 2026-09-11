@@ -35,6 +35,11 @@ openai:
     model: gpt-4o-mini
     base-url: https://api.openai.com/v1/
 
+# Razorpay payment gateway
+razorpay:
+  key-id: "${RAZORPAY_KEY_ID:}"
+  key-secret: "${RAZORPAY_KEY_SECRET:}"
+
 atlaso:
   auth:
     jwt-secret: "${JWT_SECRET}"
