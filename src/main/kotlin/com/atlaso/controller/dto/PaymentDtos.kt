@@ -21,4 +21,12 @@ data class VerifyPaymentRequest(
     // Optional — when present, the trip is marked ORDERED after a valid signature.
     val tripId: UUID? = null,
     val quantity: Int? = null,
+    // Shipping details captured at checkout (name/email come from the account).
+    val addressLine1: String? = null,
+    val addressLine2: String? = null,
+    val city: String? = null,
+    val state: String? = null,
+    val pincode: String? = null,
+    val country: String? = null,
+    val phone: String? = null,
 )

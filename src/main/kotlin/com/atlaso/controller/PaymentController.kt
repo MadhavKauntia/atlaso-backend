@@ -5,6 +5,7 @@ import com.atlaso.controller.dto.CreateOrderResponse
 import com.atlaso.controller.dto.VerifyPaymentRequest
 import com.atlaso.domain.trip.TripStatus
 import com.atlaso.service.OrderService
+import com.atlaso.service.ShippingInput
 import com.atlaso.service.PaymentService
 import com.atlaso.service.RazorpayAuthException
 import com.atlaso.service.TripService
@@ -76,7 +77,16 @@ class PaymentController(
             // Best-effort — the payment already succeeded, so a recording failure
             // must not surface as a failed verification.
             try {
-                orderService.createPaidOrder(tripId, userId, orderId, paymentId, request.quantity)
+                val shipping = ShippingInput(
+                    addressLine1 = request.addressLine1,
+                    addressLine2 = request.addressLine2,
+                    city = request.city,
+                    state = request.state,
+                    pincode = request.pincode,
+                    country = request.country,
+                    phone = request.phone,
+                )
+                orderService.createPaidOrder(tripId, userId, orderId, paymentId, request.quantity, shipping)
             } catch (ex: Exception) {
                 logger.error("Failed to record order for trip {}", tripId, ex)
             }

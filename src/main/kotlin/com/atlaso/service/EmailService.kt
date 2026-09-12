@@ -83,6 +83,23 @@ class EmailService(
         val total = "₹${inr.format(order.amountMinor / 100)}"
         val title = order.bookTitle?.let { "$it Travel Photobook" } ?: "Travel Photobook"
         val name = order.customerName?.substringBefore(" ") ?: "there"
+
+        val shippingBlock = if (!order.addressLine1.isNullOrBlank()) {
+            val lines = listOfNotNull(
+                order.customerName,
+                order.addressLine1,
+                order.addressLine2?.takeIf { it.isNotBlank() },
+                listOfNotNull(order.city, order.state, order.pincode).filter { it.isNotBlank() }.joinToString(", ").takeIf { it.isNotBlank() },
+                order.shipCountry,
+                order.phone,
+            ).joinToString("<br/>")
+            """
+            <div style="margin-top:20px;padding-top:16px;border-top:1px solid #ece5d8;">
+              <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.12em;color:#8a7f6f;margin-bottom:6px;">Shipping to</div>
+              <div style="font-size:14px;line-height:1.6;color:#262220;">$lines</div>
+            </div>
+            """.trimIndent()
+        } else ""
         return """
         <!doctype html>
         <html>
@@ -101,6 +118,8 @@ class EmailService(
                   <tr><td style="padding:6px 0;color:#8a7f6f;">Quantity</td><td style="padding:6px 0;text-align:right;">${order.quantity}</td></tr>
                   <tr><td style="padding:10px 0 0;border-top:1px solid #ece5d8;font-weight:800;">Total paid</td><td style="padding:10px 0 0;border-top:1px solid #ece5d8;text-align:right;font-weight:800;">$total</td></tr>
                 </table>
+
+                $shippingBlock
 
                 <p style="font-size:14px;line-height:1.6;color:#4a443e;margin:22px 0 0;">
                   We'll print and ship your book in about 3 days, and email you the moment it's on its way.

@@ -7,10 +7,14 @@ import com.atlaso.service.GoogleTokenVerifier
 import com.atlaso.service.JwtService
 import com.atlaso.service.UserService
 import org.springframework.http.ResponseEntity
+import org.springframework.security.core.annotation.AuthenticationPrincipal
+import org.springframework.security.oauth2.jwt.Jwt
+import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
+import java.util.UUID
 
 @RestController
 @RequestMapping("/api/auth")
@@ -31,5 +35,11 @@ class AuthController(
         )
         val token = jwtService.generateToken(user)
         return ResponseEntity.ok(AuthResponse(token = token, user = UserDto.from(user)))
+    }
+
+    @GetMapping("/me")
+    fun me(@AuthenticationPrincipal jwt: Jwt): ResponseEntity<UserDto> {
+        val user = userService.getById(UUID.fromString(jwt.subject))
+        return ResponseEntity.ok(UserDto.from(user))
     }
 }

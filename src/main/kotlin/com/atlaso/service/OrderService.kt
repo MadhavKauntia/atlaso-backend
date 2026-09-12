@@ -10,6 +10,17 @@ import java.util.UUID
 
 private const val UNIT_PRICE_MINOR = 199900L // Rs. 1999 in paise
 
+/** Shipping details captured at checkout (recipient name/email come from the account). */
+data class ShippingInput(
+    val addressLine1: String? = null,
+    val addressLine2: String? = null,
+    val city: String? = null,
+    val state: String? = null,
+    val pincode: String? = null,
+    val country: String? = null,
+    val phone: String? = null,
+)
+
 @Service
 class OrderService(
     private val orderRepository: OrderRepository,
@@ -33,6 +44,7 @@ class OrderService(
         razorpayOrderId: String?,
         razorpayPaymentId: String?,
         quantity: Int?,
+        shipping: ShippingInput? = null,
     ): Order {
         razorpayPaymentId?.let { pid ->
             orderRepository.findByRazorpayPaymentId(pid)?.let { return it }
@@ -58,6 +70,13 @@ class OrderService(
             quantity = qty,
             customerName = user?.name,
             customerEmail = user?.email ?: payment?.email,
+            addressLine1 = shipping?.addressLine1?.ifBlank { null },
+            addressLine2 = shipping?.addressLine2?.ifBlank { null },
+            city = shipping?.city?.ifBlank { null },
+            state = shipping?.state?.ifBlank { null },
+            pincode = shipping?.pincode?.ifBlank { null },
+            shipCountry = shipping?.country?.ifBlank { null },
+            phone = shipping?.phone?.ifBlank { null },
             status = "PAID",
         )
         val saved = orderRepository.save(order)

@@ -52,6 +52,27 @@ data class Order(
     @Column(name = "customer_email", length = 255)
     val customerEmail: String? = null,
 
+    @Column(name = "address_line1", length = 255)
+    val addressLine1: String? = null,
+
+    @Column(name = "address_line2", length = 255)
+    val addressLine2: String? = null,
+
+    @Column(length = 128)
+    val city: String? = null,
+
+    @Column(length = 128)
+    val state: String? = null,
+
+    @Column(length = 32)
+    val pincode: String? = null,
+
+    @Column(name = "ship_country", length = 64)
+    val shipCountry: String? = null,
+
+    @Column(length = 32)
+    val phone: String? = null,
+
     @Column(nullable = false, length = 32)
     val status: String = "PAID",
 
