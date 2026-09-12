@@ -17,6 +17,7 @@ data class BookResponse(
     val coverPhotoId: UUID?,
     val coverTemplateId: String?,
     val coverPaletteId: String?,
+    val coverCountry: String?,
     val status: BookStatus,
     val generatedAt: Instant?,
     val pages: List<PageResponse>
@@ -31,6 +32,7 @@ data class BookResponse(
             coverPhotoId = book.coverPhoto?.id,
             coverTemplateId = book.coverTemplateId,
             coverPaletteId = book.coverPaletteId,
+            coverCountry = book.coverCountry,
             status = book.status,
             generatedAt = book.generatedAt,
             pages = book.pages.map { PageResponse.from(it) }

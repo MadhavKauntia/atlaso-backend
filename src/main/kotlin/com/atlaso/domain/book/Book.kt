@@ -55,7 +55,10 @@ data class Book(
     var coverTemplateId: String? = null,
 
     @Column(name = "cover_palette_id", length = 64)
-    var coverPaletteId: String? = null
+    var coverPaletteId: String? = null,
+
+    @Column(name = "cover_country", length = 64)
+    var coverCountry: String? = null
 ) {
     fun addPage(page: Page) {
         pages.add(page)

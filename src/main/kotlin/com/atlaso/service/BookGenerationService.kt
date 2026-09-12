@@ -92,11 +92,18 @@ class BookGenerationService(
     }
 
     @Transactional
-    fun saveCoverConfig(bookId: UUID, userId: UUID, templateId: String, paletteId: String): Book {
+    fun saveCoverConfig(
+        bookId: UUID,
+        userId: UUID,
+        templateId: String?,
+        paletteId: String?,
+        country: String? = null
+    ): Book {
         val book = bookRepository.findByIdAndTripUserId(bookId, userId)
             .orElseThrow { BookNotFoundException(bookId) }
-        book.coverTemplateId = templateId
-        book.coverPaletteId = paletteId
+        templateId?.let { book.coverTemplateId = it }
+        paletteId?.let { book.coverPaletteId = it }
+        country?.let { book.coverCountry = it }
         return bookRepository.save(book)
     }
 
