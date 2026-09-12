@@ -47,6 +47,8 @@ class SecurityConfig(
                     .requestMatchers(HttpMethod.GET, "/api/trips/*/photos/*/image").permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/internal/file").permitAll()
                     .requestMatchers(HttpMethod.PUT, "/api/internal/upload").permitAll()
+                    // Admin dashboard — JWT bypassed; guarded by AdminKeyInterceptor (X-Admin-Key)
+                    .requestMatchers("/api/admin/**").permitAll()
                     .anyRequest().authenticated()
             }
             .oauth2ResourceServer { oauth2 ->
@@ -62,7 +64,7 @@ class SecurityConfig(
             .split(",").map { it.trim() }
         config.allowedOrigins = origins
         config.allowedMethods = listOf("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
-        config.allowedHeaders = listOf("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With")
+        config.allowedHeaders = listOf("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "X-Admin-Key")
         config.allowCredentials = false
         val source = UrlBasedCorsConfigurationSource()
         source.registerCorsConfiguration("/api/**", config)

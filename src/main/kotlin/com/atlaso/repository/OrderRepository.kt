@@ -8,6 +8,7 @@ import java.util.UUID
 interface OrderRepository : JpaRepository<Order, UUID> {
     fun findFirstByTripIdOrderByCreatedAtDesc(tripId: UUID): Order?
     fun findByRazorpayPaymentId(razorpayPaymentId: String): Order?
+    fun findAllByOrderByCreatedAtDesc(): List<Order>
 
     @Query(value = "SELECT nextval('order_number_seq')", nativeQuery = true)
     fun nextNumber(): Long

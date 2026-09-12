@@ -25,6 +25,9 @@ data class Order(
     @JoinColumn(name = "trip_id", nullable = false)
     val trip: Trip,
 
+    @Column(name = "book_id")
+    val bookId: UUID? = null,
+
     @Column(name = "book_title", length = 255)
     val bookTitle: String? = null,
 
@@ -74,7 +77,13 @@ data class Order(
     val phone: String? = null,
 
     @Column(nullable = false, length = 32)
-    val status: String = "PAID",
+    var status: String = "PAID",
+
+    @Column(name = "tracking_number", length = 128)
+    var trackingNumber: String? = null,
+
+    @Column(name = "shipped_at")
+    var shippedAt: Instant? = null,
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)

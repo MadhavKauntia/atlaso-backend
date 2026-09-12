@@ -56,12 +56,13 @@ class OrderService(
 
         val qty = (quantity ?: 1).coerceAtLeast(1)
         val amountMinor = payment?.amountMinor ?: (qty * UNIT_PRICE_MINOR)
-        val bookTitle = runCatching { bookGenerationService.getLatestBookByTripId(tripId, userId).title }.getOrNull()
+        val book = runCatching { bookGenerationService.getLatestBookByTripId(tripId, userId) }.getOrNull()
 
         val order = Order(
             number = orderRepository.nextNumber(),
             trip = trip,
-            bookTitle = bookTitle,
+            bookId = book?.id,
+            bookTitle = book?.title,
             razorpayOrderId = razorpayOrderId,
             razorpayPaymentId = razorpayPaymentId,
             paymentMethod = payment?.method,

@@ -46,6 +46,10 @@ brevo:
   sender-email: "${BREVO_SENDER_EMAIL:support@myatlaso.com}"
   sender-name: "${BREVO_SENDER_NAME:Atlaso}"
 
+# Admin dashboard shared secret (X-Admin-Key header)
+admin:
+  api-key: "${ADMIN_API_KEY:}"
+
 atlaso:
   auth:
     jwt-secret: "${JWT_SECRET}"
