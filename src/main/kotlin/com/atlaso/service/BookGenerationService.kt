@@ -97,13 +97,15 @@ class BookGenerationService(
         userId: UUID,
         templateId: String?,
         paletteId: String?,
-        country: String? = null
+        country: String? = null,
+        subtitle: String? = null
     ): Book {
         val book = bookRepository.findByIdAndTripUserId(bookId, userId)
             .orElseThrow { BookNotFoundException(bookId) }
         templateId?.let { book.coverTemplateId = it }
         paletteId?.let { book.coverPaletteId = it }
         country?.let { book.coverCountry = it }
+        subtitle?.let { book.subtitle = it.ifBlank { null } }
         return bookRepository.save(book)
     }
 

@@ -17,7 +17,8 @@ data class SlotPhotoRequest(val photoId: UUID)
 data class CoverConfigRequest(
     val templateId: String? = null,
     val paletteId: String? = null,
-    val country: String? = null
+    val country: String? = null,
+    val subtitle: String? = null
 )
 data class ExportBookRequest(val coverImageBase64: String?)
 
@@ -87,7 +88,7 @@ class BookController(
         @AuthenticationPrincipal jwt: Jwt
     ): ResponseEntity<BookResponse> {
         val userId = UUID.fromString(jwt.subject)
-        val book = bookGenerationService.saveCoverConfig(bookId, userId, body.templateId, body.paletteId, body.country)
+        val book = bookGenerationService.saveCoverConfig(bookId, userId, body.templateId, body.paletteId, body.country, body.subtitle)
         return ResponseEntity.ok(BookResponse.from(book))
     }
 
