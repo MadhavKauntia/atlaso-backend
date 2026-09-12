@@ -17,23 +17,24 @@ class PhotoGrouper {
     private val logger = LoggerFactory.getLogger(PhotoGrouper::class.java)
 
     companion object {
-        const val TARGET_PAGE_COUNT = 24
+        const val TARGET_PAGE_COUNT = 50
 
         // Book physical layout (cover not counted):
         //   Page 1        — isolated (right-hand page, back of cover on left)
         //   Pages 2–3     — spread 1
         //   …
-        //   Pages 22–23   — spread 11
-        //   Page 24       — isolated (left-hand page, right = back cover)
+        //   Pages 48–49   — spread 24
+        //   Page 50       — isolated (left-hand page, right = back cover)
         //
-        // 1 isolated + 11 spreads + 1 isolated = 24 pages → 13 episodes → 12 boundaries
-        private const val SPREAD_COUNT = 11
-        private const val BOUNDARY_COUNT = 12  // TARGET_EPISODES - 1
+        // 1 isolated + 24 spreads + 1 isolated = 50 pages → 26 episodes → 25 boundaries.
+        // Minimum 50 photos → each spread episode gets 2 photos → exactly 1 photo per page.
+        private const val SPREAD_COUNT = 24
+        private const val BOUNDARY_COUNT = 25  // TARGET_EPISODES - 1
         private const val MAX_PHOTOS_PER_PAGE = 4
     }
 
     /**
-     * Groups photos into exactly 24 page groups using constrained semantic boundary detection.
+     * Groups photos into exactly 50 page groups using constrained semantic boundary detection.
      *
      * Algorithm:
      * 1. Sort photos chronologically.
@@ -42,10 +43,10 @@ class PhotoGrouper {
      * 3. Greedily select the 12 highest-scoring boundaries subject to:
      *    - Each spread episode (episodes 1–11) has ≥ 2 photos (so it can produce 2 pages).
      *    - Each isolated episode (0 and 12) has ≥ 1 photo.
-     *    This ensures semantically coherent spreads while guaranteeing exactly 24 pages.
+     *    This ensures semantically coherent spreads while guaranteeing exactly 50 pages.
      * 4. Episode 0  → page 1  (isolated page group, up to 4 photos).
-     * 5. Episodes 1–11 → split at midpoint into left/right page groups per spread.
-     * 6. Episode 12 → page 24 (isolated page group, up to 4 photos).
+     * 5. Episodes 1–24 → split at midpoint into left/right page groups per spread.
+     * 6. Episode 25 → page 50 (isolated page group, up to 4 photos).
      *
      * Within each page group, photos are sorted by aesthetic score so the LayoutEngine
      * assigns the best photo to the featured slot.
@@ -92,7 +93,7 @@ class PhotoGrouper {
                 groups.add(buildGroup(episode.subList(0, mid).take(MAX_PHOTOS_PER_PAGE)))
                 groups.add(buildGroup(episode.subList(mid, episode.size).take(MAX_PHOTOS_PER_PAGE)))
             } else {
-                // Isolated pages (page 1 and page 24): use exactly 1 photo.
+                // Isolated pages (page 1 and page 50): use exactly 1 photo.
                 // A single HERO image looks better, and avoids placing two unrelated
                 // photos together when the episode's photos don't share a common theme.
                 val limit = if (isIsolated) 1 else MAX_PHOTOS_PER_PAGE
@@ -111,14 +112,14 @@ class PhotoGrouper {
      * Greedily selects [BOUNDARY_COUNT] boundary positions from the scored gap list,
      * subject to:
      *   - Each spread episode (between consecutive boundaries) has ≥ 2 photos.
-     *   - The final isolated episode (page 24) has ≥ 1 photo.
+     *   - The final isolated episode (page 50) has ≥ 1 photo.
      *
      * Boundaries are tried in descending score order. A candidate is accepted when:
      *   a) It is ≥ 2 positions away from any already-selected boundary on both sides
      *      (guarantees ≥ 2 photos in the episodes it creates/splits).
      *   b) It is ≤ maxAllowed, leaving enough room for the remaining boundaries.
      *
-     * For n = 24 (minimum), the constraints force exactly [0, 2, 4, …, 22], which is
+     * For n = 50 (minimum), the constraints force exactly [0, 2, 4, …, 48], which is
      * equivalent to equal distribution — no wasted choices, always valid.
      * For larger n, semantic scores guide placement toward natural scene/location breaks.
      */
@@ -150,7 +151,7 @@ class PhotoGrouper {
             selected.add(candidate)
         }
 
-        // Safety fallback — should never trigger for n ≥ 24, but guards against edge cases.
+        // Safety fallback — should never trigger for n ≥ 50, but guards against edge cases.
         if (selected.size < BOUNDARY_COUNT) {
             logger.warn(
                 "Constrained boundary selection found only {}/{} boundaries; falling back to equal spacing",
