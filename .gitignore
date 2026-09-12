@@ -47,3 +47,6 @@ uploads/
 ### Env ###
 .env
 .env.*
+
+# Claude Code local state
+.claude/
