@@ -20,4 +20,5 @@ data class VerifyPaymentRequest(
     val razorpaySignature: String? = null,
     // Optional — when present, the trip is marked ORDERED after a valid signature.
     val tripId: UUID? = null,
+    val quantity: Int? = null,
 )

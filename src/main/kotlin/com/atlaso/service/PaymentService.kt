@@ -31,6 +31,43 @@ class PaymentService(
 
     data class RazorpayOrder(val orderId: String, val amount: Long, val currency: String)
 
+    data class RazorpayPayment(
+        val method: String?,
+        val amountMinor: Long?,
+        val email: String?,
+        val contact: String?,
+    )
+
+    /**
+     * Fetches a captured payment from Razorpay (for the payment method, amount and
+     * payer details shown on the receipt). Best-effort — returns null on failure.
+     */
+    fun fetchPayment(paymentId: String): RazorpayPayment? {
+        return try {
+            val request = Request.Builder()
+                .url("https://api.razorpay.com/v1/payments/$paymentId")
+                .header("Authorization", Credentials.basic(keyId, keySecret))
+                .get()
+                .build()
+            http.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    logger.warn("Razorpay payment fetch failed: HTTP {}", response.code)
+                    return null
+                }
+                val n = objectMapper.readTree(response.body?.string().orEmpty())
+                RazorpayPayment(
+                    method = n.get("method")?.asText()?.takeIf { it.isNotBlank() },
+                    amountMinor = n.get("amount")?.asLong(),
+                    email = n.get("email")?.asText()?.takeIf { it.isNotBlank() && it != "null" },
+                    contact = n.get("contact")?.asText()?.takeIf { it.isNotBlank() && it != "null" },
+                )
+            }
+        } catch (ex: Exception) {
+            logger.warn("Razorpay payment fetch error for {}: {}", paymentId, ex.message)
+            null
+        }
+    }
+
     /**
      * Creates a Razorpay order. [amountMinor] is in the smallest currency unit
      * (paise for INR) and must be at least 100.

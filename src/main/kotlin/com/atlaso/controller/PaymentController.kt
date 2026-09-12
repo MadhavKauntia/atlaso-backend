@@ -4,6 +4,7 @@ import com.atlaso.controller.dto.CreateOrderRequest
 import com.atlaso.controller.dto.CreateOrderResponse
 import com.atlaso.controller.dto.VerifyPaymentRequest
 import com.atlaso.domain.trip.TripStatus
+import com.atlaso.service.OrderService
 import com.atlaso.service.PaymentService
 import com.atlaso.service.RazorpayAuthException
 import com.atlaso.service.TripService
@@ -23,6 +24,7 @@ import java.util.UUID
 class PaymentController(
     private val paymentService: PaymentService,
     private val tripService: TripService,
+    private val orderService: OrderService,
 ) {
     private val logger = LoggerFactory.getLogger(PaymentController::class.java)
 
@@ -65,11 +67,19 @@ class PaymentController(
                 .body(mapOf("verified" to false, "error" to "Signature verification failed"))
         }
 
-        // Signature is valid — mark the trip ordered (validating ownership first).
+        // Signature is valid — mark the trip ordered (validating ownership first)
+        // and record the order for the receipt.
         request.tripId?.let { tripId ->
             val userId = UUID.fromString(jwt.subject)
             tripService.getTrip(tripId, userId) // throws if not owned by this user
             tripService.updateStatus(tripId, TripStatus.ORDERED)
+            // Best-effort — the payment already succeeded, so a recording failure
+            // must not surface as a failed verification.
+            try {
+                orderService.createPaidOrder(tripId, userId, orderId, paymentId, request.quantity)
+            } catch (ex: Exception) {
+                logger.error("Failed to record order for trip {}", tripId, ex)
+            }
         }
 
         return ResponseEntity.ok(mapOf("verified" to true))

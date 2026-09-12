@@ -1,0 +1,77 @@
+package com.atlaso.service
+
+import com.atlaso.domain.order.Order
+import com.atlaso.repository.OrderRepository
+import com.atlaso.repository.UserRepository
+import org.slf4j.LoggerFactory
+import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
+import java.util.UUID
+
+private const val UNIT_PRICE_MINOR = 199900L // Rs. 1999 in paise
+
+@Service
+class OrderService(
+    private val orderRepository: OrderRepository,
+    private val userRepository: UserRepository,
+    private val tripService: TripService,
+    private val bookGenerationService: BookGenerationService,
+    private val paymentService: PaymentService,
+    private val receiptRenderer: ReceiptRenderer,
+) {
+    private val logger = LoggerFactory.getLogger(OrderService::class.java)
+
+    /**
+     * Records a paid order after a verified payment. Idempotent on the Razorpay
+     * payment id. Ownership of [tripId] must already have been validated.
+     */
+    @Transactional
+    fun createPaidOrder(
+        tripId: UUID,
+        userId: UUID,
+        razorpayOrderId: String?,
+        razorpayPaymentId: String?,
+        quantity: Int?,
+    ): Order {
+        razorpayPaymentId?.let { pid ->
+            orderRepository.findByRazorpayPaymentId(pid)?.let { return it }
+        }
+
+        val trip = tripService.getTrip(tripId, userId) // throws if not owned
+        val user = userRepository.findById(userId).orElse(null)
+        val payment = razorpayPaymentId?.let { paymentService.fetchPayment(it) }
+
+        val qty = (quantity ?: 1).coerceAtLeast(1)
+        val amountMinor = payment?.amountMinor ?: (qty * UNIT_PRICE_MINOR)
+        val bookTitle = runCatching { bookGenerationService.getLatestBookByTripId(tripId, userId).title }.getOrNull()
+
+        val order = Order(
+            number = orderRepository.nextNumber(),
+            trip = trip,
+            bookTitle = bookTitle,
+            razorpayOrderId = razorpayOrderId,
+            razorpayPaymentId = razorpayPaymentId,
+            paymentMethod = payment?.method,
+            amountMinor = amountMinor,
+            currency = "INR",
+            quantity = qty,
+            customerName = user?.name,
+            customerEmail = user?.email ?: payment?.email,
+            status = "PAID",
+        )
+        val saved = orderRepository.save(order)
+        logger.info("Recorded order ATL-{} for trip {}", saved.number, tripId)
+        return saved
+    }
+
+    /** Generates the receipt PDF for the latest order on [tripId], owner-checked. */
+    fun generateReceipt(tripId: UUID, userId: UUID): Pair<ByteArray, String> {
+        val order = orderRepository.findFirstByTripIdOrderByCreatedAtDesc(tripId)
+            ?: throw RuntimeException("No order found for trip $tripId")
+        if (order.trip.user?.id != userId) {
+            throw RuntimeException("No order found for trip $tripId")
+        }
+        val bytes = receiptRenderer.render(order)
+        return bytes to "atlaso-receipt-ATL-R-${order.number}.pdf"
+    }
+}
