@@ -108,11 +108,10 @@ class PdfExportService(
         val document = PDDocument()
         try {
             val image = PDImageXObject.createFromByteArray(document, pngBytes, "cover")
-            // Use the image's natural pixel dimensions as the PDF page points (1pt = 1px here)
-            // The PNG is 918×1218 (3x with bleed). Scale down to a sensible print size.
-            val scale = PdfRenderer.PAGE_WIDTH / image.width.toFloat()
+            // Cover uses the same trim size as the interior pages (6.9 × 9.8 in);
+            // the full-bleed cover image fills the page.
             val pageW = PdfRenderer.PAGE_WIDTH
-            val pageH = image.height.toFloat() * scale
+            val pageH = PdfRenderer.PAGE_HEIGHT
 
             val page = PDPage(PDRectangle(pageW, pageH))
             document.addPage(page)

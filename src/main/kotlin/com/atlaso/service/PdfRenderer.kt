@@ -41,13 +41,14 @@ class PdfRenderer {
     private val logger = LoggerFactory.getLogger(PdfRenderer::class.java)
 
     companion object {
-        const val PAGE_WIDTH = 595f  // A4 portrait width in points
-        const val PAGE_HEIGHT = 842f // A4 portrait height in points
+        // Photobook trim size: 6.9 × 9.8 inches (1 in = 72 pt).
+        const val PAGE_WIDTH = 496.8f  // 6.9 in
+        const val PAGE_HEIGHT = 705.6f // 9.8 in
         private const val MARGIN = 20f
         private const val CAPTION_FONT_SIZE = 8f
         private const val TITLE_FONT_SIZE = 32f
         private const val SUBTITLE_FONT_SIZE = 18f
-        private const val MAX_IMAGE_DIMENSION = 1800  // ~150 DPI on A4, sufficient for print
+        private const val MAX_IMAGE_DIMENSION = 1800  // ~260 DPI at this trim, sufficient for print
     }
 
     fun renderCover(title: String, subtitle: String?): ByteArray {
