@@ -40,6 +40,12 @@ razorpay:
   key-id: "${RAZORPAY_KEY_ID:}"
   key-secret: "${RAZORPAY_KEY_SECRET:}"
 
+# Brevo transactional email
+brevo:
+  api-key: "${BREVO_API_KEY:}"
+  sender-email: "${BREVO_SENDER_EMAIL:support@myatlaso.com}"
+  sender-name: "${BREVO_SENDER_NAME:Atlaso}"
+
 atlaso:
   auth:
     jwt-secret: "${JWT_SECRET}"

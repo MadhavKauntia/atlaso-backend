@@ -18,6 +18,7 @@ class OrderService(
     private val bookGenerationService: BookGenerationService,
     private val paymentService: PaymentService,
     private val receiptRenderer: ReceiptRenderer,
+    private val emailService: EmailService,
 ) {
     private val logger = LoggerFactory.getLogger(OrderService::class.java)
 
@@ -61,6 +62,13 @@ class OrderService(
         )
         val saved = orderRepository.save(order)
         logger.info("Recorded order ATL-{} for trip {}", saved.number, tripId)
+
+        // Best-effort order confirmation email with the receipt attached.
+        runCatching {
+            val receipt = receiptRenderer.render(saved)
+            emailService.sendOrderConfirmation(saved, receipt)
+        }.onFailure { logger.error("Order confirmation email failed for ATL-{}", saved.number, it) }
+
         return saved
     }
 

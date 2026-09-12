@@ -1,0 +1,121 @@
+package com.atlaso.service
+
+import com.atlaso.domain.order.Order
+import com.fasterxml.jackson.databind.ObjectMapper
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Value
+import org.springframework.stereotype.Service
+import java.util.Base64
+import java.text.NumberFormat
+import java.util.Locale
+
+/**
+ * Sends transactional email via Brevo's REST API
+ * (POST https://api.brevo.com/v3/smtp/email, authenticated with the `api-key`
+ * header). No SDK — reuses the OkHttp client and Jackson mapper on the classpath.
+ * All sends are best-effort; failures are logged, never thrown.
+ */
+@Service
+class EmailService(
+    @Value("\${brevo.api-key}") private val apiKey: String,
+    @Value("\${brevo.sender-email}") private val senderEmail: String,
+    @Value("\${brevo.sender-name}") private val senderName: String,
+    private val objectMapper: ObjectMapper,
+) {
+    private val logger = LoggerFactory.getLogger(EmailService::class.java)
+    private val http = OkHttpClient()
+    private val inr = NumberFormat.getNumberInstance(Locale("en", "IN"))
+
+    /** Emails the order confirmation to the customer, attaching the receipt PDF when provided. */
+    fun sendOrderConfirmation(order: Order, receiptPdf: ByteArray?) {
+        val to = order.customerEmail?.takeIf { it.isNotBlank() }
+        if (apiKey.isBlank()) {
+            logger.warn("Brevo API key not configured — skipping order confirmation email")
+            return
+        }
+        if (to == null) {
+            logger.warn("Order ATL-{} has no customer email — skipping confirmation email", order.number)
+            return
+        }
+
+        val body = mutableMapOf<String, Any>(
+            "sender" to mapOf("name" to senderName, "email" to senderEmail),
+            "to" to listOf(mapOf("email" to to, "name" to (order.customerName ?: to))),
+            "subject" to "Your Atlaso order is confirmed — ATL-${order.number}",
+            "htmlContent" to buildHtml(order),
+        )
+        if (receiptPdf != null) {
+            body["attachment"] = listOf(
+                mapOf(
+                    "content" to Base64.getEncoder().encodeToString(receiptPdf),
+                    "name" to "atlaso-receipt-ATL-R-${order.number}.pdf",
+                )
+            )
+        }
+
+        try {
+            val request = Request.Builder()
+                .url("https://api.brevo.com/v3/smtp/email")
+                .header("api-key", apiKey)
+                .header("accept", "application/json")
+                .post(objectMapper.writeValueAsString(body).toRequestBody("application/json".toMediaType()))
+                .build()
+            http.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    logger.info("Sent order confirmation email for ATL-{} to {}", order.number, to)
+                } else {
+                    logger.error(
+                        "Brevo email failed for ATL-{}: HTTP {} {}",
+                        order.number, response.code, response.body?.string().orEmpty()
+                    )
+                }
+            }
+        } catch (ex: Exception) {
+            logger.error("Brevo email error for ATL-{}", order.number, ex)
+        }
+    }
+
+    private fun buildHtml(order: Order): String {
+        val total = "₹${inr.format(order.amountMinor / 100)}"
+        val title = order.bookTitle?.let { "$it Travel Photobook" } ?: "Travel Photobook"
+        val name = order.customerName?.substringBefore(" ") ?: "there"
+        return """
+        <!doctype html>
+        <html>
+          <body style="margin:0;padding:0;background:#f3ead8;font-family:Arial,Helvetica,sans-serif;color:#262220;">
+            <div style="max-width:520px;margin:0 auto;padding:32px 24px;">
+              <div style="font-size:26px;font-weight:800;letter-spacing:-0.02em;color:#262220;">atlaso<span style="color:#e2631f;">.</span></div>
+              <div style="background:#ffffff;border-radius:16px;padding:28px 26px;margin-top:20px;">
+                <h1 style="font-size:22px;margin:0 0 8px;color:#262220;">Your order is confirmed 🎉</h1>
+                <p style="font-size:15px;line-height:1.6;color:#4a443e;margin:0 0 20px;">
+                  Hi $name, thanks for your order! Your photobook is on its way to the press.
+                </p>
+
+                <table style="width:100%;border-collapse:collapse;font-size:14px;color:#262220;">
+                  <tr><td style="padding:6px 0;color:#8a7f6f;">Order number</td><td style="padding:6px 0;text-align:right;font-weight:700;">ATL-${order.number}</td></tr>
+                  <tr><td style="padding:6px 0;color:#8a7f6f;">Book</td><td style="padding:6px 0;text-align:right;">$title</td></tr>
+                  <tr><td style="padding:6px 0;color:#8a7f6f;">Quantity</td><td style="padding:6px 0;text-align:right;">${order.quantity}</td></tr>
+                  <tr><td style="padding:10px 0 0;border-top:1px solid #ece5d8;font-weight:800;">Total paid</td><td style="padding:10px 0 0;border-top:1px solid #ece5d8;text-align:right;font-weight:800;">$total</td></tr>
+                </table>
+
+                <p style="font-size:14px;line-height:1.6;color:#4a443e;margin:22px 0 0;">
+                  We'll print and ship your book in about 3 days, and email you the moment it's on its way.
+                  Your payment receipt is attached to this email.
+                </p>
+              </div>
+
+              <p style="font-size:12px;color:#8a7f6f;text-align:center;margin:22px 0 0;line-height:1.6;">
+                Questions? Just reply to this email or write to
+                <a href="mailto:support@myatlaso.com" style="color:#c9352c;">support@myatlaso.com</a>.<br/>
+                Atlaso · <a href="https://myatlaso.com" style="color:#c9352c;">myatlaso.com</a>
+              </p>
+            </div>
+          </body>
+        </html>
+        """.trimIndent()
+    }
+}
