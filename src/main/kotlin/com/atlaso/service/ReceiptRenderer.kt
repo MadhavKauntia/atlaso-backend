@@ -5,8 +5,8 @@ import org.apache.pdfbox.pdmodel.PDDocument
 import org.apache.pdfbox.pdmodel.PDPage
 import org.apache.pdfbox.pdmodel.PDPageContentStream
 import org.apache.pdfbox.pdmodel.common.PDRectangle
-import org.apache.pdfbox.pdmodel.font.PDType1Font
-import org.apache.pdfbox.pdmodel.font.Standard14Fonts
+import org.apache.pdfbox.pdmodel.font.PDFont
+import org.apache.pdfbox.pdmodel.font.PDType0Font
 import org.springframework.stereotype.Component
 import java.io.ByteArrayOutputStream
 import java.text.NumberFormat
@@ -16,8 +16,8 @@ import java.util.Locale
 
 /**
  * Renders a simple, no-GST payment receipt PDF for a paid [Order].
- * Amounts use "Rs." rather than the ₹ glyph, which the standard PDF fonts
- * (Helvetica) cannot encode.
+ * Uses an embedded Roboto font (which includes the ₹ glyph) so amounts render
+ * with the rupee symbol.
  */
 @Component
 class ReceiptRenderer {
@@ -31,15 +31,15 @@ class ReceiptRenderer {
         try {
             val page = PDPage(PDRectangle.A4)
             doc.addPage(page)
-            val bold = PDType1Font(Standard14Fonts.FontName.HELVETICA_BOLD)
-            val regular = PDType1Font(Standard14Fonts.FontName.HELVETICA)
+            val regular = PDType0Font.load(doc, requireNotNull(javaClass.getResourceAsStream("/fonts/Roboto-Regular.ttf")) { "Roboto-Regular.ttf missing" })
+            val bold = PDType0Font.load(doc, requireNotNull(javaClass.getResourceAsStream("/fonts/Roboto-Bold.ttf")) { "Roboto-Bold.ttf missing" })
 
             val left = 60f
             val right = PDRectangle.A4.width - 60f // right edge of content
             var y = PDRectangle.A4.height - 80f
 
             PDPageContentStream(doc, page).use { cs ->
-                fun text(s: String, font: PDType1Font, size: Float, x: Float = left, color: Triple<Float, Float, Float> = Triple(0.1f, 0.1f, 0.1f)) {
+                fun text(s: String, font: PDFont, size: Float, x: Float = left, color: Triple<Float, Float, Float> = Triple(0.1f, 0.1f, 0.1f)) {
                     cs.setNonStrokingColor(color.first, color.second, color.third)
                     cs.beginText()
                     cs.setFont(font, size)
@@ -48,7 +48,7 @@ class ReceiptRenderer {
                     cs.endText()
                 }
 
-                fun row(label: String, amount: String, font: PDType1Font, size: Float) {
+                fun row(label: String, amount: String, font: PDFont, size: Float) {
                     text(label, font, size)
                     val w = font.getStringWidth(amount) / 1000f * size
                     text(amount, font, size, x = right - w)
@@ -94,10 +94,10 @@ class ReceiptRenderer {
                 text(order.bookTitle?.let { "$it Travel Photobook" } ?: "Travel Photobook", regular, 11f)
                 gap(18f)
                 val total = order.amountMinor / 100
-                val totalStr = "Rs. ${inr.format(total)}"
-                row("${order.quantity} x Hardcover Photobook", totalStr, regular, 11f)
+                val totalStr = "₹${inr.format(total)}"
+                row("${order.quantity} × Hardcover Photobook", totalStr, regular, 11f)
                 gap(16f)
-                row("Shipping", "Rs. 0", regular, 11f)
+                row("Shipping", "₹0", regular, 11f)
                 gap(12f)
                 divider()
                 gap(20f)
