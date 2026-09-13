@@ -1,5 +1,6 @@
 package com.atlaso.controller
 
+import com.atlaso.controller.dto.OrderSummaryResponse
 import com.atlaso.service.OrderService
 import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
@@ -28,5 +29,17 @@ class ReceiptController(
             .contentType(MediaType.APPLICATION_PDF)
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"$filename\"")
             .body(pdfBytes)
+    }
+
+    /** Order summary (number + shipping address) for the confirmation page. */
+    @GetMapping("/trips/{tripId}/order")
+    fun getOrder(
+        @PathVariable tripId: UUID,
+        @AuthenticationPrincipal jwt: Jwt,
+    ): ResponseEntity<OrderSummaryResponse> {
+        val userId = UUID.fromString(jwt.subject)
+        val order = orderService.getOrderForTrip(tripId, userId)
+            ?: return ResponseEntity.notFound().build()
+        return ResponseEntity.ok(OrderSummaryResponse.from(order))
     }
 }

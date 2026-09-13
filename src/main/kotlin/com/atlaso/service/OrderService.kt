@@ -93,6 +93,13 @@ class OrderService(
     }
 
     /** Generates the receipt PDF for the latest order on [tripId], owner-checked. */
+    /** The latest paid order for a trip, verified to belong to the user. */
+    fun getOrderForTrip(tripId: UUID, userId: UUID): Order? {
+        val order = orderRepository.findFirstByTripIdOrderByCreatedAtDesc(tripId) ?: return null
+        if (order.trip.user?.id != userId) return null
+        return order
+    }
+
     fun generateReceipt(tripId: UUID, userId: UUID): Pair<ByteArray, String> {
         val order = orderRepository.findFirstByTripIdOrderByCreatedAtDesc(tripId)
             ?: throw RuntimeException("No order found for trip $tripId")
