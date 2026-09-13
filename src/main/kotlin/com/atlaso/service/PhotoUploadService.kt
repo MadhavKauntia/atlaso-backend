@@ -43,6 +43,10 @@ class PhotoUploadService(
         )
 
         private val HEIC_CONTENT_TYPES = setOf("image/heic", "image/heif")
+
+        /** Caps that protect storage and (mainly) per-book vision-analysis cost. */
+        const val MAX_PHOTOS_PER_TRIP = 500
+        const val MAX_FILE_SIZE_BYTES = 50L * 1024 * 1024 // 50 MB
     }
 
     fun uploadPhoto(tripId: UUID, file: MultipartFile, userId: UUID): Photo {
@@ -122,9 +126,16 @@ class PhotoUploadService(
 
     fun initiateUploads(tripId: UUID, requests: List<InitiateUploadRequest>): List<InitiateUploadResponse> {
         tripService.getTrip(tripId) // verify trip exists
+        val existing = photoRepository.countByTripId(tripId)
+        if (existing + requests.size > MAX_PHOTOS_PER_TRIP) {
+            throw IllegalArgumentException("A book can hold at most $MAX_PHOTOS_PER_TRIP photos.")
+        }
         return requests.map { req ->
             if (req.contentType !in ALLOWED_CONTENT_TYPES) {
                 throw IllegalArgumentException("Unsupported file type: ${req.contentType}")
+            }
+            if (req.fileSize > MAX_FILE_SIZE_BYTES) {
+                throw IllegalArgumentException("Each photo must be under ${MAX_FILE_SIZE_BYTES / (1024 * 1024)} MB.")
             }
             val ext = when (req.contentType) {
                 "image/jpeg" -> "jpg"
@@ -136,13 +147,19 @@ class PhotoUploadService(
             }
             val photoId = UUID.randomUUID()
             val storageKey = "$tripId/$photoId.$ext"
-            val uploadUrl = storageService.getUploadUrl(storageKey, req.contentType)
+            // Bind Content-Length into the presigned PUT so a stolen URL can't be
+            // used to upload an object larger than the declared (capped) size.
+            val uploadUrl = storageService.getUploadUrl(storageKey, req.contentType, req.fileSize)
             InitiateUploadResponse(photoId = photoId, storageKey = storageKey, uploadUrl = uploadUrl)
         }
     }
 
     fun confirmUploads(tripId: UUID, confirmations: List<ConfirmUploadRequest>): List<Photo> {
         val trip = tripService.getTrip(tripId)
+        val existing = photoRepository.countByTripId(tripId)
+        if (existing + confirmations.size > MAX_PHOTOS_PER_TRIP) {
+            throw IllegalArgumentException("A book can hold at most $MAX_PHOTOS_PER_TRIP photos.")
+        }
         val photos = confirmations.map { conf ->
             val takenAt = conf.takenAt?.let { Instant.ofEpochMilli(it) }
             Photo(

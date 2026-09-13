@@ -38,7 +38,7 @@ class LocalStorageService(
         return "http://localhost:8080/api/internal/file?key=$encodedKey"
     }
 
-    override fun getUploadUrl(key: String, contentType: String): String {
+    override fun getUploadUrl(key: String, contentType: String, contentLength: Long): String {
         val encodedKey = URLEncoder.encode(key, "UTF-8")
         return "http://localhost:8080/api/internal/upload?key=$encodedKey"
     }

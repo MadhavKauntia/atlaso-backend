@@ -74,11 +74,12 @@ class S3StorageService(
         return presigner.presignGetObject(presignRequest).url().toString()
     }
 
-    override fun getUploadUrl(key: String, contentType: String): String {
+    override fun getUploadUrl(key: String, contentType: String, contentLength: Long): String {
         val putRequest = PutObjectRequest.builder()
             .bucket(config.bucketName)
             .key(key)
             .contentType(contentType)
+            .contentLength(contentLength)
             .build()
         val presignRequest = PutObjectPresignRequest.builder()
             .signatureDuration(Duration.ofHours(1))
