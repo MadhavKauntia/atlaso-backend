@@ -105,7 +105,7 @@ class EmailService(
         <html>
           <body style="margin:0;padding:0;background:#f3ead8;font-family:Arial,Helvetica,sans-serif;color:#262220;">
             <div style="max-width:520px;margin:0 auto;padding:32px 24px;">
-              <div style="font-size:26px;font-weight:800;letter-spacing:-0.02em;color:#262220;">atlaso<span style="color:#e2631f;">.</span></div>
+              <img src="https://myatlaso.com/assets/logo-black.png" alt="Atlaso" height="34" style="display:block;height:34px;width:auto;border:0;" />
               <div style="background:#ffffff;border-radius:16px;padding:28px 26px;margin-top:20px;">
                 <h1 style="font-size:22px;margin:0 0 8px;color:#262220;">Your order is confirmed 🎉</h1>
                 <p style="font-size:15px;line-height:1.6;color:#4a443e;margin:0 0 20px;">
