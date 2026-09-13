@@ -51,10 +51,13 @@ data class PhotoResponse(
     val signals: PhotoSignals?,
     val rotation: Int,
     val uploadedAt: Instant?,
-    val analyzedAt: Instant?
+    val analyzedAt: Instant?,
+    // Direct (presigned) URL to the image so the browser skips the per-image
+    // backend redirect. Null when a URL couldn't be produced.
+    val imageUrl: String? = null
 ) {
     companion object {
-        fun from(photo: Photo): PhotoResponse = PhotoResponse(
+        fun from(photo: Photo, imageUrl: String? = null): PhotoResponse = PhotoResponse(
             id = photo.id!!,
             tripId = photo.trip.id!!,
             originalFilename = photo.originalFilename,
@@ -64,7 +67,8 @@ data class PhotoResponse(
             signals = photo.signals,
             rotation = photo.rotation,
             uploadedAt = photo.uploadedAt,
-            analyzedAt = photo.analyzedAt
+            analyzedAt = photo.analyzedAt,
+            imageUrl = imageUrl
         )
     }
 }

@@ -25,6 +25,12 @@ class PhotoController(
     private val storageService: StorageService
 ) {
 
+    /** Builds a PhotoResponse including a direct (presigned) image URL. */
+    private fun toResponse(photo: com.atlaso.domain.photo.Photo): PhotoResponse {
+        val url = runCatching { storageService.getAccessUrl(photo.storageKey, photo.contentType) }.getOrNull()
+        return PhotoResponse.from(photo, url)
+    }
+
     @PostMapping
     fun uploadPhoto(
         @PathVariable tripId: UUID,
@@ -33,7 +39,7 @@ class PhotoController(
     ): ResponseEntity<PhotoResponse> {
         val userId = UUID.fromString(jwt.subject)
         val photo = photoUploadService.uploadPhoto(tripId, file, userId)
-        return ResponseEntity.status(HttpStatus.CREATED).body(PhotoResponse.from(photo))
+        return ResponseEntity.status(HttpStatus.CREATED).body(toResponse(photo))
     }
 
     @PostMapping("/bulk")
@@ -50,7 +56,7 @@ class PhotoController(
             val filename = file.originalFilename ?: "unknown"
             try {
                 val photo = photoUploadService.uploadPhoto(tripId, file, userId)
-                uploaded.add(PhotoResponse.from(photo))
+                uploaded.add(toResponse(photo))
             } catch (e: Exception) {
                 failed.add(BulkUploadFailure(filename = filename, error = e.message ?: "Unknown error"))
             }
@@ -63,7 +69,7 @@ class PhotoController(
     // Public — guest trips have no user; ownership enforced elsewhere after claim
     @GetMapping
     fun getPhotos(@PathVariable tripId: UUID): ResponseEntity<List<PhotoResponse>> {
-        val photos = photoUploadService.getPhotosForTrip(tripId).map { PhotoResponse.from(it) }
+        val photos = photoUploadService.getPhotosForTrip(tripId).map { toResponse(it) }
         return ResponseEntity.ok(photos)
     }
 
@@ -76,7 +82,7 @@ class PhotoController(
     ): ResponseEntity<PhotoResponse> {
         val userId = UUID.fromString(jwt.subject)
         val photo = photoUploadService.rotatePhoto(photoId, degrees, tripId, userId)
-        return ResponseEntity.ok(PhotoResponse.from(photo))
+        return ResponseEntity.ok(toResponse(photo))
     }
 
     @DeleteMapping("/{photoId}")
@@ -107,7 +113,7 @@ class PhotoController(
         @RequestBody confirmations: List<ConfirmUploadRequest>
     ): ResponseEntity<List<PhotoResponse>> {
         val photos = photoUploadService.confirmUploads(tripId, confirmations)
-        return ResponseEntity.status(HttpStatus.CREATED).body(photos.map { PhotoResponse.from(it) })
+        return ResponseEntity.status(HttpStatus.CREATED).body(photos.map { toResponse(it) })
     }
 
     @GetMapping("/{photoId}/image")
