@@ -8,6 +8,7 @@ import com.atlaso.repository.PhotoRepository
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.Executors
@@ -16,20 +17,75 @@ import java.util.concurrent.Executors
 @Transactional
 class PhotoAnalysisService(
     private val photoRepository: PhotoRepository,
-    private val storageService: StorageService,
-    private val visionModelService: VisionModelService
+    private val visionModelService: VisionModelService,
+    private val storageService: StorageService
 ) {
     private val logger = LoggerFactory.getLogger(PhotoAnalysisService::class.java)
     private val executor = Executors.newFixedThreadPool(10)
 
+    companion object {
+        // A "burst" = photos taken within this window of each other. Kept tight so
+        // only genuine rapid-fire shots collapse, not distinct moments.
+        private const val BURST_WINDOW_SECONDS = 2L
+        // Frames kept per burst (the sharpest), so vision still ranks a couple.
+        // Clusters of <= this size lose nothing.
+        private const val REPS_PER_BURST = 2
+    }
+
     fun analyzeUnanalyzedPhotos(tripId: UUID): List<Photo> {
         val unanalyzed = photoRepository.findByTripIdAndSignalsIsNull(tripId)
-        logger.info("Found {} unanalyzed photos for trip {}", unanalyzed.size, tripId)
 
-        val futures = unanalyzed.map { photo ->
+        // Skip vision calls for redundant burst frames: cluster tight bursts and
+        // analyze only the sharpest representatives. Everything else is analyzed.
+        val representatives = selectRepresentatives(unanalyzed)
+        logger.info(
+            "Trip {}: analyzing {} representatives out of {} unanalyzed photos",
+            tripId, representatives.size, unanalyzed.size
+        )
+
+        val futures = representatives.map { photo ->
             executor.submit<Photo> { analyzePhoto(photo) }
         }
         return futures.map { it.get() }
+    }
+
+    /**
+     * Collapses tight time-bursts to their [REPS_PER_BURST] sharpest frames.
+     * Photos without a timestamp can't be clustered, so they're all kept.
+     */
+    private fun selectRepresentatives(photos: List<Photo>): List<Photo> {
+        val timed = photos.filter { it.metadata.takenAt != null }.sortedBy { it.metadata.takenAt }
+        val untimed = photos.filter { it.metadata.takenAt == null }
+
+        val kept = mutableListOf<Photo>()
+        kept.addAll(untimed)
+
+        var cluster = mutableListOf<Photo>()
+        var clusterStart: Instant? = null
+
+        fun flush() {
+            if (cluster.isEmpty()) return
+            if (cluster.size <= REPS_PER_BURST) {
+                kept.addAll(cluster)
+            } else {
+                kept.addAll(cluster.sortedByDescending { it.metadata.sharpness ?: 0.0 }.take(REPS_PER_BURST))
+            }
+            cluster = mutableListOf()
+        }
+
+        for (photo in timed) {
+            val t = photo.metadata.takenAt!!
+            if (clusterStart == null || Duration.between(clusterStart, t).seconds <= BURST_WINDOW_SECONDS) {
+                if (clusterStart == null) clusterStart = t
+                cluster.add(photo)
+            } else {
+                flush()
+                clusterStart = t
+                cluster.add(photo)
+            }
+        }
+        flush()
+        return kept
     }
 
     fun analyzePhoto(photo: Photo): Photo {

@@ -45,7 +45,7 @@ class PhotoUploadService(
         private val HEIC_CONTENT_TYPES = setOf("image/heic", "image/heif")
 
         /** Caps that protect storage and (mainly) per-book vision-analysis cost. */
-        const val MAX_PHOTOS_PER_TRIP = 500
+        const val MAX_PHOTOS_PER_TRIP = 1000
         const val MAX_FILE_SIZE_BYTES = 50L * 1024 * 1024 // 50 MB
     }
 
@@ -173,7 +173,8 @@ class PhotoUploadService(
                     height = conf.height,
                     takenAt = takenAt,
                     location = if (conf.latitude != null && conf.longitude != null)
-                        GeoLocation(conf.latitude, conf.longitude) else null
+                        GeoLocation(conf.latitude, conf.longitude) else null,
+                    sharpness = conf.sharpness
                 )
             )
         }

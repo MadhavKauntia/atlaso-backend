@@ -9,7 +9,10 @@ data class PhotoMetadata(
     val takenAt: Instant? = null,
     val location: GeoLocation? = null,
     val orientation: Int = 1,
-    val cameraModel: String? = null
+    val cameraModel: String? = null,
+    /** Client-computed sharpness (Laplacian variance); higher = sharper. Used to
+     *  pick the best frame of a burst before spending a vision-analysis call. */
+    val sharpness: Double? = null
 ) : Serializable
 
 data class GeoLocation(

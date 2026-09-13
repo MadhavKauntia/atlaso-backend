@@ -28,7 +28,8 @@ data class ConfirmUploadRequest(
     val height: Int,
     val takenAt: Long?,
     val latitude: Double? = null,
-    val longitude: Double? = null
+    val longitude: Double? = null,
+    val sharpness: Double? = null
 )
 
 data class BulkUploadResponse(
