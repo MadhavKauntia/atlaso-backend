@@ -1,8 +1,11 @@
 package com.atlaso.service
 
+import com.atlaso.application.layout.FinalAudit
+import com.atlaso.application.layout.LayoutSiblings
 import com.atlaso.application.layout.Orientation
 import com.atlaso.application.layout.PhotoGroup
 import com.atlaso.application.layout.PhotoGrouper
+import com.atlaso.application.layout.PhotoSimilarity
 import com.atlaso.domain.book.Layout
 import com.atlaso.domain.book.Page
 import com.atlaso.domain.book.PhotoSlot
@@ -22,6 +25,8 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
         private const val PAGE_ASPECT = 6.9 / 9.8
         // Below this cover-fit visible fraction, full-bleed would crop too hard → frame it.
         private const val CROP_SAFE_MIN = 0.62
+        // A facing pair at/above this spread similarity is treated as redundant (§13).
+        private const val SPREAD_SIM_THRESHOLD = 0.6
     }
 
     fun generatePages(photos: List<Photo>): List<Page> {
@@ -44,18 +49,67 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
             prevLayout = layout
         }
 
-        // 2. Deterministic pacing pass.
+        // 2. Deterministic pacing pass (rhythm: break identical runs, establish/close).
         pacingPass(planned)
 
-        // 3. Build pages with geometry.
+        // 3. Spread composition: treat facing pages as one composition and reduce redundancy.
+        spreadCompositionPass(planned)
+
+        // 4. Final structural audit (may adjust layouts to enforce invariants).
+        val audited = planned.map { FinalAudit.Page(it.group, it.layout) }.toMutableList()
+        FinalAudit.audit(audited)
+
+        // 5. Build pages with geometry.
         var pageNumber = 1
-        val pages = planned.map { p ->
+        val pages = audited.map { p ->
             createPage(pageNumber++, p.layout, orderSlotsForLayout(p.group.photos, p.layout))
         }
 
         logger.info("Generated {} pages from {} groups", pages.size, groups.size)
         return pages
     }
+
+    /**
+     * Treats LEFT+RIGHT facing pages (pairs 0-1, 2-3, …) as one composition (§12, §13).
+     * Where a facing pair is too similar, prefer complementary content by swapping the right
+     * page with its same-episode neighbour (a safe reorder — episode order is preserved), and
+     * add layout contrast when both pages share a layout. Colour is folded into the spread
+     * similarity metric as a light secondary signal (§14).
+     */
+    private fun spreadCompositionPass(planned: MutableList<Planned>) {
+        var k = 0
+        while (k + 1 < planned.size) {
+            val leftIdx = k
+            val rightIdx = k + 1
+            val sim = spreadSim(planned[leftIdx], planned[rightIdx])
+            if (sim >= SPREAD_SIM_THRESHOLD) {
+                // Try swapping the right page with the next page (same episode = safe reorder).
+                val nextIdx = k + 2
+                if (nextIdx < planned.size && sameEpisode(planned[rightIdx], planned[nextIdx])) {
+                    val candidate = planned[nextIdx]
+                    if (spreadSim(planned[leftIdx], candidate) < sim) {
+                        val tmp = planned[rightIdx]
+                        planned[rightIdx] = candidate
+                        planned[nextIdx] = tmp
+                    }
+                }
+                // Add layout contrast when the pair still shares a layout.
+                if (planned[leftIdx].layout == planned[rightIdx].layout) {
+                    LayoutSiblings.sibling(planned[rightIdx].layout, planned[rightIdx].group)
+                        ?.let { planned[rightIdx].layout = it }
+                }
+            }
+            k += 2
+        }
+    }
+
+    private fun spreadSim(a: Planned, b: Planned): Double =
+        PhotoSimilarity.spreadSimilarity(
+            a.group.photos, b.group.photos, a.group.episodeIndex, b.group.episodeIndex
+        )
+
+    private fun sameEpisode(a: Planned, b: Planned): Boolean =
+        a.group.episodeIndex >= 0 && a.group.episodeIndex == b.group.episodeIndex
 
     /**
      * One deterministic pass to vary rhythm without breaking chronology much:
@@ -66,7 +120,7 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
         // No 3 identical layouts in a row (also softens runs of dense collages).
         for (i in 2 until planned.size) {
             if (planned[i].layout == planned[i - 1].layout && planned[i - 1].layout == planned[i - 2].layout) {
-                val sibling = siblingLayout(planned[i - 1].layout, planned[i - 1].group)
+                val sibling = LayoutSiblings.sibling(planned[i - 1].layout, planned[i - 1].group)
                 if (sibling != null) planned[i - 1].layout = sibling
             }
         }
@@ -82,27 +136,6 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
             val from = maxOf(0, planned.size - 4)
             val idx = (from until planned.size - 1).lastOrNull { isQuiet(planned[it]) }
             if (idx != null) planned.add(planned.removeAt(idx))
-        }
-    }
-
-    /** A same-slot-count variant of a layout, used to break identical runs. */
-    private fun siblingLayout(layout: Layout, group: PhotoGroup): Layout? {
-        return when (layout) {
-            Layout.FOUR_GRID -> Layout.FOUR_MIXED
-            Layout.FOUR_MIXED -> Layout.FOUR_GRID
-            Layout.TWO_HORIZONTAL -> Layout.TWO_VERTICAL
-            Layout.TWO_VERTICAL -> Layout.TWO_HORIZONTAL
-            Layout.SINGLE_FULL -> Layout.SINGLE_FRAMED
-            Layout.HERO_LANDSCAPE -> Layout.SINGLE_FRAMED
-            Layout.SINGLE_FRAMED -> {
-                val p = group.photos.firstOrNull()
-                when {
-                    p == null -> null
-                    Orientation.from(p.metadata.width, p.metadata.height) == Orientation.LANDSCAPE -> Layout.HERO_LANDSCAPE
-                    else -> Layout.SINGLE_FULL
-                }
-            }
-            else -> null // THREE_GRID / DOUBLE_PAGE have no same-count sibling
         }
     }
 
@@ -124,10 +157,11 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
 
     private fun chooseLayout(group: PhotoGroup, prev: Layout?): Layout {
         val photos = group.photos
+        // Normal pages are 1/2/4 photos only (§10); grouping never emits 3. A stray other
+        // count falls through to the four-photo treatment as a safety net (no THREE_GRID).
         return when (photos.size) {
             1 -> chooseSingle(photos[0], group)
             2 -> chooseTwo(photos)
-            3 -> Layout.THREE_GRID
             else -> chooseFour(photos, group, prev)
         }
     }

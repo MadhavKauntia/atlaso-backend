@@ -42,32 +42,45 @@ The layered package structure under `com.atlaso`:
 
 `POST /api/books/{id}/export` → `PdfExportService` → `PdfRenderer` (PDFBox) → saves to `./uploads/pdfs/`. PDFs are internal-only — users never download them; they are stored for fulfilment by the printing company.
 
+The deterministic pipeline aims for a **curated memory of the whole trip**, not the
+highest-scoring photos. Priority order: coverage > uniqueness > hierarchy > spread
+composition > layout variety > color. Shared building blocks live in `application/layout/`:
+`EpisodeDetector` (natural events), `PhotoSimilarity` (one home for pairwise similarity +
+spread similarity, with a per-run cache), `VisualRole` (LANDSCAPE_ENVIRONMENT / SOLO_COUPLE
+/ GROUP / ACTION_CANDID / DETAIL_OBJECT, derived from signals), `StandaloneScorer`
+(`baseScore` for selection quality, `score` for hero reservation), and `FinalAudit`.
+
 ## Photo Selection Algorithm (`PhotoSelector`)
 
-Four sequential phases — each phase feeds into the next:
-1. **Quality filter** — drops photos with aesthetic score < 0.4, blur > 0.6, or dimensions < 1200px
-2. **Burst dedup** — photos within 10 seconds of each other are clustered; only the highest-scoring survives
-3. **Weighted scoring** — aesthetic (50%) + sharpness (20%) + scene variety bonus (10%) + orientation (10%) + lighting (5%) + time variety (5%)
-4. **Diversity selection** — iteratively picks photos to hit scene-type targets: landscape 35%, people 30%, city 15%, food 10%, misc 10%
+Curates *which* photos enter the book (coverage-first, not top-N):
+1. **Quality filter** — drops photos with aesthetic < 0.4, blur > 0.6, or dimensions < 1200px, or missing signals.
+2. **Episodes** — chronological split into natural events (`EpisodeDetector`, boundary threshold 0.55).
+3. **Near-duplicate clustering (per episode)** — cluster by composition similarity + burst timestamp; keep 1 per cluster, a 2nd only if it communicates meaningfully different info. Different `sceneType` is never a near-dup.
+4. **Coverage** — reserve the strongest representative of *every* episode, then ensure *every trip day* with usable photos is represented. A distinct activity never disappears because another has more photos.
+5. **Saturation fill** — add remaining photos by `adjustedScore = quality + uniqueness + underrepBonus − similarityPenalty − episodeSaturationPenalty − visualRoleSaturationPenalty` (group/landscape/detail penalized harder). Stops once the book is full enough and the next photo no longer earns its place. Global `usedPhotoIds` — a source photo is never reused.
 
-Output is sorted chronologically for narrative flow.
+Budget: up to 200 photos (50 pages × 4), at least ~50 when material allows. Output sorted chronologically.
 
 ## Photo Grouping (`PhotoGrouper`)
 
-After `PhotoSelector` picks the best ~30 photos, `PhotoGrouper` (in `application/layout/`) groups them into page-sized clusters before `LayoutEngine` assigns layouts. Each group becomes one page.
-
-Similarity score between two photos (weighted sum):
-- **Color harmony** (25%) — hex dominant colors converted to hue, circular distance mapped to compatibility score; `colorTemperature` field adds ±0.1 bonus/penalty
-- **Time of day** (20%) — exact match = 1.0, adjacent categories = 0.5, opposite = 0.0
-- **Object overlap** (20%) — Jaccard similarity on `detectedObjects`
-- **Scene compatibility** (20%) — matrix-based: people+food = 0.7, landscape+food = 0.1, etc.
-- **Temporal proximity** (15%) — exponential decay: `exp(-gapMinutes / 15)`
-
-Grouping threshold: 0.55. Groups sorted chronologically by median `takenAt`. Single-photo orphans merge with nearest compatible neighbor (unless temporal gap > 3 hours).
+Groups selected photos into page-sized clusters (each group = one page) using the same
+`EpisodeDetector`. Per episode: reserve strong standalone photos as **solo pages** (capped
+at 2 per visual role, §hero-reservation), then chunk the rest into **1/2/4-photo pages**
+(never 3/5/6+) that mix visual roles. Pages are normalized to exactly **50** by merging
+weak pages (too many) or splitting dense ones (too few), always snapping to a valid
+{1,2,4} size. `PhotoGroup` carries `episodeIndex` for spread reasoning.
 
 ## LayoutEngine
 
-`LayoutEngine` takes `List<Photo>` (delegates internally to `PhotoGrouper`) or `List<PhotoGroup>` via `generatePagesFromGroups()`. Layout is chosen by group size (1→HERO/SINGLE, 2→TWO_HORIZONTAL, 3→THREE_GRID, 4→FOUR_GRID). In `THREE_GRID`, the featured top slot is assigned by `featuredScore`: aesthetic×0.5 + faces bonus + shallow DoF + golden hour + landscape orientation.
+`LayoutEngine` takes `List<Photo>` (delegates to `PhotoGrouper`) or `List<PhotoGroup>` via
+`generatePagesFromGroups()`. Layout is chosen from count + orientation + standalone +
+shot/scope + crop-safety + previous layout (1→full-bleed/framed, 2→two horizontal/vertical,
+4→FOUR_GRID/FOUR_MIXED). **`THREE_GRID` and `DOUBLE_PAGE_FULL_BLEED` are reserved and never
+emitted.** After layout: a **pacing pass** (break identical runs, establishing/quiet ends),
+a **spread-composition pass** (facing pages 0-1/2-3/… reduced for redundancy via safe
+same-episode reorders + layout contrast; color is a light secondary signal), then
+**`FinalAudit`** enforces structural invariants (1/2/4 per page, ≤2 consecutive identical
+layouts, ≤1 double-page, no reused photo, flags near-duplicate adjacencies).
 
 ## JSONB Columns
 
@@ -92,8 +105,16 @@ Grouping threshold: 0.55. Groups sorted chronologically by median `takenAt`. Sin
 | `mood` | String | joyful / serene / dramatic / adventurous |
 | `depthOfField` | String | shallow / deep |
 | `isBlurry` | Boolean | Derived: blurScore > 0.6 |
+| `locationTag` | String? | beach / mountain / restaurant / temple / … / other |
+| `subjectType` | String | person / couple / group / landscape / food / object / architecture / activity / other |
+| `shotDistance` | String | closeup / medium / wide |
+| `subjectProminence` | String | low / medium / high |
+| `settingScope` | String | detail / subject / environment |
+| `backgroundComplexity` | String | low / medium / high |
+| `negativeSpace` | String | low / medium / high |
+| `schemaVersion` | Int | Analysis schema version (§reuse); `CURRENT_SCHEMA_VERSION` |
 
-All fields have safe defaults — photos analyzed before new fields were added deserialize without errors.
+All fields have safe defaults — photos analyzed before new fields were added deserialize without errors. `PhotoAnalysisService` re-analyzes a photo only when `signals == null` or its `schemaVersion` is below `PhotoSignals.CURRENT_SCHEMA_VERSION` (bump that constant to force re-analysis after a meaningful schema change); valid, current analyses are reused with no vision call. `subjectType`…`negativeSpace` are objective composition fields; downstream code (visual roles, layout, saturation) is deterministic and never asks the model for hero/story/layout judgments.
 
 The vision prompt is in `VISION_MODEL_PROMPT.md` and embedded in `OpenAIVisionClient`. `maxTokens = 400`, `temperature = 0.3`.
 
@@ -115,7 +136,7 @@ API key and model (`gpt-4o-mini`) are in `src/main/resources/application.yml`. T
 
 ## Known Test Issues
 
-`PhotoSelectorTest.should maintain scene type diversity` is a pre-existing failure — the test's `createPhoto()` helper uses `Instant.now()` for all photos, so they all land within the 10-second burst window, get collapsed to one photo by burst dedup, and the diversity assertion fails. Fix: space out `takenAt` timestamps by scene type in that test.
+`PhotoSelectorTest` passes in full. `AtlasoBackendApplicationTests.contextLoads` requires a running PostgreSQL (Flyway migrates on startup); it fails with a connection error when no DB is up — that's environmental, not a code failure.
 
 ## What's Not Implemented
 

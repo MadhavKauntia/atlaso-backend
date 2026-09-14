@@ -5,12 +5,26 @@ import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.time.Duration
 import java.time.Instant
+import java.util.UUID
 
 /**
- * Selects the best photos for a photobook using quality filtering,
- * burst detection, weighted scoring, and diversity selection.
+ * Curates the photos that make it into the book. The goal is breadth of memory, not the
+ * highest-scoring photos: every meaningful episode is represented first (coverage), near
+ * duplicates collapse, and each additional photo from an already well-covered event is
+ * worth progressively less (saturation).
  *
- * Algorithm is deterministic and explainable.
+ * Order of operations (all deterministic):
+ *   1. Quality filter (§3).
+ *   2. Episodes (§4, shared [EpisodeDetector]).
+ *   3. Near-duplicate clustering within each episode — keep 1, allow 2 if meaningfully
+ *      different (§6).
+ *   4. Coverage-first: reserve the strongest representative of every episode, then cover
+ *      every trip day (§5).
+ *   5. Saturation fill: add remaining photos by adjustedScore until the budget is hit or
+ *      the best remaining photo is no longer worth adding (§7, §8).
+ *
+ * Output is chronological. Page grouping / hero reservation / layout happen later in
+ * [PhotoGrouper] and [LayoutEngine].
  */
 @Component
 class PhotoSelector(
@@ -21,58 +35,114 @@ class PhotoSelector(
 ) {
     private val logger = LoggerFactory.getLogger(PhotoSelector::class.java)
 
+    private companion object {
+        // Upper bound on selected photos: 50 pages × 4 photos/page.
+        const val MAX_PHOTOS = 200
+        // Always select at least enough to fill the target pages when material allows,
+        // so a rich trip still yields a full book (§17).
+        const val TARGET_PAGES = PhotoGrouper.TARGET_PAGE_COUNT
+
+        // Two photos are near-duplicates when composition similarity clears this, or when
+        // they're within a burst window and clearly the same moment (§6).
+        const val NEAR_DUP_THRESHOLD = 0.80
+        const val BURST_NEAR_DUP_THRESHOLD = 0.60
+
+        // adjustedScore weights (§7). Simple and tunable.
+        const val W_QUALITY = 1.0
+        const val W_UNIQUENESS = 0.5
+        const val W_UNDERREP = 0.4
+        const val W_SIMILARITY = 0.6
+        const val EPISODE_SAT_STEP = 0.08      // penalty per photo already taken from the episode
+        const val ROLE_SAT_STEP = 0.05         // penalty per photo already taken of the role
+        const val ROLE_SAT_HEAVY_MULT = 1.5    // extra penalty for group/landscape/detail (§8)
+        // Below this, an additional photo isn't worth adding once the book is full enough.
+        const val SATURATION_FLOOR = 0.45
+    }
+
     /**
-     * Main entry point: selects photos for a photobook.
+     * Main entry point: selects the photos for a photobook. Signature unchanged.
      *
-     * @param photos All photos from the trip (must have signals populated)
-     * @return Result with selected photos, logs, and statistics
+     * @param photos All photos from the trip (analyzed ones have signals populated)
      */
     fun selectPhotosForBook(photos: List<Photo>): PhotoSelectionResult {
         val log = mutableListOf<String>()
-
-        // Phase 1: Quality Filtering
-        logger.info("Starting photo selection with ${photos.size} photos")
+        logger.info("Starting photo selection with {} photos", photos.size)
         log.add("Starting with ${photos.size} photos")
 
-        val qualityPhotos = filterLowQuality(photos, qualityThresholds)
-        logger.info("After quality filter: ${qualityPhotos.size} photos")
-        log.add("After quality filter: ${qualityPhotos.size} photos (removed ${photos.size - qualityPhotos.size})")
+        // Phase 1: quality filter (§3).
+        val quality = filterLowQuality(photos, qualityThresholds)
+        log.add("After quality filter: ${quality.size} photos (removed ${photos.size - quality.size})")
+        logger.info("After quality filter: {} photos", quality.size)
 
-        // Phase 2: Burst Detection
-        val dedupedPhotos = dedupeBursts(qualityPhotos, burstConfig)
-        logger.info("After burst deduplication: ${dedupedPhotos.size} photos")
-        log.add("After burst deduplication: ${dedupedPhotos.size} photos (removed ${qualityPhotos.size - dedupedPhotos.size})")
+        if (quality.isEmpty()) {
+            // Nothing usable — keep generation alive with whatever exists, chronologically.
+            val chrono = photos.sortedBy { it.metadata.takenAt ?: Instant.MIN }
+            log.add("No photos passed quality filter; using all uploaded photos")
+            return PhotoSelectionResult(chrono, log, calculateStats(chrono))
+        }
 
-        // Phase 3: Adaptive selection — keep all photos up to 200 (50 pages × 4 per page max).
-        // Above 200, apply diversity scoring to pick the best spread.
-        // If quality filter + dedup dropped us below 50, relax: skip quality filter and dedup again.
-        val maxPhotos = 200
-        val minPhotos = 50
-        val selectedPhotos = when {
-            dedupedPhotos.size >= maxPhotos ->
-                selectPhotos(dedupedPhotos, scoringWeights, diversityConfig.copy(targetPhotos = maxPhotos))
-            dedupedPhotos.size >= minPhotos ->
-                dedupedPhotos
-            else -> {
-                log.add("Only ${dedupedPhotos.size} photos after quality filter; relaxing constraints to reach $minPhotos pages")
-                logger.info("Below minimum page count; falling back to dedup-only selection")
-                val fallback = dedupeBursts(photos, burstConfig)
-                val fallbackPhotos = if (fallback.size >= minPhotos) {
-                    fallback
-                } else {
-                    log.add("Only ${fallback.size} photos after burst dedup; using all uploaded photos")
-                    logger.info("Still below minimum after dedup-only fallback; using all uploaded photos")
-                    photos
-                }
-                if (fallbackPhotos.size <= maxPhotos) fallbackPhotos
-                else selectPhotos(fallbackPhotos, scoringWeights, diversityConfig.copy(targetPhotos = maxPhotos))
+        // Phase 2: episodes (§4).
+        val sorted = EpisodeDetector.sortChronologically(quality)
+        val episodes = EpisodeDetector.detect(sorted)
+        log.add("Detected ${episodes.size} episodes")
+        val cache = PhotoSimilarity.Cache()
+
+        // Phase 3: near-duplicate clustering within each episode (§6).
+        val episodeCandidates = episodes.map { dedupeEpisode(it, cache) }
+        val allCandidates = episodeCandidates.flatten()
+        val episodeOf: Map<UUID, Int> = buildMap {
+            episodeCandidates.forEachIndexed { idx, cands -> cands.forEach { it.id?.let { id -> put(id, idx) } } }
+        }
+        log.add("After near-duplicate clustering: ${allCandidates.size} distinct candidates")
+        logger.info("Near-duplicate clustering: {} -> {} candidates", quality.size, allCandidates.size)
+
+        // Selection state. Membership is tracked by id (JPA entities aren't safe hash keys).
+        val selectedIds = LinkedHashSet<UUID>()
+        val selectedPhotos = mutableListOf<Photo>()
+        val perEpisodeCount = IntArray(episodes.size)
+        val roleCount = HashMap<VisualRole, Int>()
+
+        fun take(photo: Photo) {
+            val id = photo.id ?: return
+            if (!selectedIds.add(id)) return
+            selectedPhotos.add(photo)
+            episodeOf[id]?.let { perEpisodeCount[it]++ }
+            roleCount.merge(VisualRole.of(photo), 1, Int::plus)
+        }
+
+        // Phase 4a: coverage — strongest representative of every episode (§5).
+        episodeCandidates.forEach { cands ->
+            cands.maxByOrNull { StandaloneScorer.baseScore(it) }?.let { take(it) }
+        }
+        // Phase 4b: coverage — represent every trip day that has usable photos (§5).
+        val coveredDays = selectedPhotos.mapNotNull { EpisodeDetector.dayOf(it) }.toMutableSet()
+        allCandidates.groupBy { EpisodeDetector.dayOf(it) }.forEach { (day, dayPhotos) ->
+            if (day != null && day !in coveredDays) {
+                dayPhotos.maxByOrNull { StandaloneScorer.baseScore(it) }?.let { take(it); coveredDays.add(day) }
             }
         }
-        logger.info("Final selection: ${selectedPhotos.size} photos")
-        log.add("Final selection: ${selectedPhotos.size} photos")
+        log.add("Coverage reserved ${selectedPhotos.size} photos (${episodes.size} episodes, ${coveredDays.size} days)")
 
-        // Sort chronologically for natural story flow
+        // Phase 5: saturation fill (§7, §8).
+        val budget = minOf(MAX_PHOTOS, allCandidates.size)
+        val minEnough = minOf(budget, TARGET_PAGES)
+        while (selectedPhotos.size < budget) {
+            var best: Photo? = null
+            var bestScore = Double.NEGATIVE_INFINITY
+            for (photo in allCandidates) {
+                if (photo.id != null && photo.id in selectedIds) continue
+                val score = adjustedScore(photo, episodeOf, selectedPhotos, perEpisodeCount, roleCount, cache)
+                if (score > bestScore) { bestScore = score; best = photo }
+            }
+            if (best == null) break
+            // Once the book is full enough, stop adding photos that no longer earn their place.
+            if (selectedPhotos.size >= minEnough && bestScore < SATURATION_FLOOR) break
+            take(best)
+        }
+
         val chronological = selectedPhotos.sortedBy { it.metadata.takenAt ?: Instant.MIN }
+        log.add("Final selection: ${chronological.size} photos")
+        logger.info("Final selection: {} photos", chronological.size)
 
         return PhotoSelectionResult(
             photos = chronological,
@@ -82,303 +152,128 @@ class PhotoSelector(
     }
 
     /**
-     * Phase 1: Remove photos that don't meet minimum quality standards.
+     * Phase 1: remove photos that don't meet minimum quality standards (§3).
      */
     private fun filterLowQuality(photos: List<Photo>, thresholds: QualityThresholds): List<Photo> {
         return photos.filter { photo ->
-            val signals = photo.signals
-            val metadata = photo.metadata
-
-            // Must have AI analysis
-            if (signals == null) {
-                logger.debug("Filtered ${photo.id}: no AI signals")
-                return@filter false
+            val signals = photo.signals ?: run {
+                logger.debug("Filtered {}: no AI signals", photo.id); return@filter false
             }
-
-            // Quality checks
+            val metadata = photo.metadata
             val passesAesthetic = signals.aestheticScore >= thresholds.minAestheticScore
             val passesBlur = signals.blurScore <= thresholds.maxBlurScore
             val passesDimension = metadata.width >= thresholds.minDimension &&
-                                 metadata.height >= thresholds.minDimension
-
-            if (!passesAesthetic) {
-                logger.debug("Filtered ${photo.id}: aesthetic ${signals.aestheticScore} < ${thresholds.minAestheticScore}")
-            }
-            if (!passesBlur) {
-                logger.debug("Filtered ${photo.id}: blur ${signals.blurScore} > ${thresholds.maxBlurScore}")
-            }
-            if (!passesDimension) {
-                logger.debug("Filtered ${photo.id}: dimensions ${metadata.width}x${metadata.height}")
-            }
-
+                metadata.height >= thresholds.minDimension
             passesAesthetic && passesBlur && passesDimension
         }
     }
 
     /**
-     * Phase 2: Detect bursts (rapid-fire shots) and keep only the best from each.
+     * Near-duplicate clustering within one episode (§6). Clusters photos that are visually
+     * the same moment, keeps the best of each cluster, and allows a second only when it
+     * communicates meaningfully different information (e.g. wide environment + close action).
      */
-    private fun dedupeBursts(photos: List<Photo>, config: BurstConfig): List<Photo> {
-        val bursts = detectBursts(photos, config)
-
-        logger.debug("Detected ${bursts.size} time-bursts")
-
-        val burstPhotoIds = bursts.flatMap { it.photos.map { p -> p.id } }.toSet()
-        val nonBurstPhotos = photos.filter { it.id !in burstPhotoIds }
-        // Only collapse frames within a burst that are ALSO semantically similar, so
-        // e.g. a wide beach shot and a close couple portrait taken seconds apart both
-        // survive, while three near-identical selfies collapse to the best one.
-        val keptFromBursts = bursts.flatMap { keepSemanticallyDistinct(it.photos) }
-
-        return nonBurstPhotos + keptFromBursts
+    private fun dedupeEpisode(episode: List<Photo>, cache: PhotoSimilarity.Cache): List<Photo> {
+        if (episode.size <= 1) return episode
+        val ordered = EpisodeDetector.sortChronologically(episode)
+        val clusters = mutableListOf<MutableList<Photo>>()
+        for (photo in ordered) {
+            val target = clusters.firstOrNull { cluster -> cluster.any { isNearDuplicate(it, photo, cache) } }
+            if (target != null) target.add(photo) else clusters.add(mutableListOf(photo))
+        }
+        return clusters.flatMap { cluster ->
+            val byQuality = cluster.sortedByDescending { StandaloneScorer.baseScore(it) }
+            val kept = mutableListOf(byQuality.first())
+            // Allow one extra photo per cluster if it genuinely differs and is usable.
+            byQuality.drop(1)
+                .firstOrNull { differsMeaningfully(it, kept.first()) && StandaloneScorer.baseScore(it) >= 0.45 }
+                ?.let { kept.add(it) }
+            kept
+        }
     }
 
-    /** Within a time-burst, keep the best frame of each run of semantically-similar shots. */
-    private fun keepSemanticallyDistinct(burstPhotos: List<Photo>): List<Photo> {
-        val sorted = burstPhotos.sortedBy { it.metadata.takenAt }
-        val kept = mutableListOf<Photo>()
-        var cluster = mutableListOf<Photo>()
-        fun flush() {
-            if (cluster.isEmpty()) return
-            kept.add(cluster.maxByOrNull { it.signals?.aestheticScore ?: 0.0 } ?: cluster.first())
-            cluster = mutableListOf()
-        }
-        for (photo in sorted) {
-            // Compare against the cluster's anchor so a drifting sequence splits.
-            if (cluster.isEmpty() || isSemanticallySimilar(cluster.first(), photo)) {
-                cluster.add(photo)
-            } else {
-                flush()
-                cluster.add(photo)
-            }
-        }
-        flush()
-        return kept
+    private fun isNearDuplicate(a: Photo, b: Photo, cache: PhotoSimilarity.Cache): Boolean {
+        val sa = a.signals
+        val sb = b.signals
+        // Different scene type = different content, never a near-duplicate (§6).
+        if (sa?.sceneType != null && sb?.sceneType != null && sa.sceneType != sb.sceneType) return false
+
+        val sim = cache.similarity(a, b)
+        if (sim >= NEAR_DUP_THRESHOLD) return true
+        // Timestamp is a clustering signal: same burst + similar composition = same moment.
+        val ta = a.metadata.takenAt
+        val tb = b.metadata.takenAt
+        val timeClose = ta != null && tb != null &&
+            Duration.between(ta, tb).abs().seconds <= burstConfig.timeWindowSeconds
+        val sameFaces = sa?.facesCount == sb?.facesCount
+        val sameLocation = sa?.locationTag == sb?.locationTag || sa?.locationTag == null || sb?.locationTag == null
+        return timeClose && sim >= BURST_NEAR_DUP_THRESHOLD && sameFaces && sameLocation
     }
 
-    private fun isSemanticallySimilar(a: Photo, b: Photo): Boolean {
+    /** Whether [a] adds information over [b] worth keeping a second frame for (§6). */
+    private fun differsMeaningfully(a: Photo, b: Photo): Boolean {
         val sa = a.signals ?: return false
         val sb = b.signals ?: return false
-        val sameLocation = sa.locationTag == sb.locationTag || sa.locationTag == null || sb.locationTag == null
-        return sa.subjectType == sb.subjectType &&
-            sa.shotDistance == sb.shotDistance &&
-            sa.facesCount == sb.facesCount &&
-            sameLocation &&
-            objectJaccard(sa.detectedObjects, sb.detectedObjects) >= 0.4
-    }
-
-    private fun objectJaccard(a: List<String>, b: List<String>): Double {
-        if (a.isEmpty() || b.isEmpty()) return 0.0
-        val sa = a.toSet()
-        val sb = b.toSet()
-        val union = sa.union(sb).size.toDouble()
-        return if (union == 0.0) 0.0 else sa.intersect(sb).size / union
+        // Clearly different content only counts when both actually list objects — an empty
+        // list is "unknown", not "different".
+        val bothHaveObjects = sa.detectedObjects.isNotEmpty() && sb.detectedObjects.isNotEmpty()
+        return VisualRole.of(a) != VisualRole.of(b) ||
+            sa.shotDistance != sb.shotDistance ||
+            sa.settingScope != sb.settingScope ||
+            (bothHaveObjects && PhotoSimilarity.objectJaccard(sa.detectedObjects, sb.detectedObjects) < 0.3)
     }
 
     /**
-     * Detects photo bursts (groups taken within timeWindowSeconds).
+     * Saturation-aware value of adding [photo] given what's already selected (§7):
+     *   quality + uniqueness + underrepresentationBonus
+     *     − similarityPenalty − episodeSaturationPenalty − visualRoleSaturationPenalty
      */
-    private fun detectBursts(photos: List<Photo>, config: BurstConfig): List<Burst> {
-        // Sort by capture time
-        val sorted = photos
-            .filter { it.metadata.takenAt != null }
-            .sortedBy { it.metadata.takenAt }
-
-        val bursts = mutableListOf<Burst>()
-        var currentBurst = mutableListOf<Photo>()
-        var burstStartTime: Instant? = null
-
-        sorted.forEach { photo ->
-            val photoTime = photo.metadata.takenAt!!
-
-            if (burstStartTime == null) {
-                // Start first burst
-                burstStartTime = photoTime
-                currentBurst.add(photo)
-            } else {
-                val timeSinceStart = Duration.between(burstStartTime, photoTime).seconds
-
-                if (timeSinceStart <= config.timeWindowSeconds) {
-                    // Same burst
-                    currentBurst.add(photo)
-                } else {
-                    // New burst - save previous if it has multiple photos
-                    if (currentBurst.size > 1) {
-                        bursts.add(Burst(
-                            photos = currentBurst.toList(),
-                            startTime = burstStartTime!!,
-                            endTime = currentBurst.last().metadata.takenAt!!
-                        ))
-                    }
-
-                    // Start new burst
-                    burstStartTime = photoTime
-                    currentBurst = mutableListOf(photo)
-                }
-            }
-        }
-
-        // Add final burst
-        if (currentBurst.size > 1) {
-            bursts.add(Burst(
-                photos = currentBurst.toList(),
-                startTime = burstStartTime!!,
-                endTime = currentBurst.last().metadata.takenAt!!
-            ))
-        }
-
-        return bursts
-    }
-
-    /**
-     * Phase 3 & 4: Score photos and select with diversity constraints.
-     */
-    private fun selectPhotos(
-        photos: List<Photo>,
-        weights: ScoringWeights,
-        diversityConfig: DiversityConfig
-    ): List<Photo> {
-        val selected = mutableListOf<Photo>()
-        val sceneTypeCounts = mutableMapOf<String?, Int>()
-        val timeOfDayCounts = mutableMapOf<String?, Int>()
-
-        // Calculate target counts per category
-        val sceneTargets = diversityConfig.sceneTypeTargets.mapValues { (_, ratio) ->
-            (diversityConfig.targetPhotos * ratio).toInt()
-        }
-
-        logger.debug("Scene targets: $sceneTargets")
-
-        // Score all photos initially
-        var scoredPhotos = photos.map { photo ->
-            scorePhoto(photo, weights, sceneTypeCounts, timeOfDayCounts)
-        }.sortedByDescending { it.totalScore }
-
-        // Pass 1: diversity-constrained selection
-        val skippedByQuota = mutableListOf<Photo>()
-        while (selected.size < diversityConfig.targetPhotos && scoredPhotos.isNotEmpty()) {
-            val nextPhoto = scoredPhotos.first()
-            val signals = nextPhoto.photo.signals!!
-
-            val sceneCount = sceneTypeCounts[signals.sceneType] ?: 0
-            val sceneTarget = sceneTargets[signals.sceneType] ?: 3
-
-            if (sceneCount < sceneTarget) {
-                selected.add(nextPhoto.photo)
-                sceneTypeCounts[signals.sceneType] = sceneCount + 1
-                timeOfDayCounts[signals.timeOfDay] = (timeOfDayCounts[signals.timeOfDay] ?: 0) + 1
-
-                logger.debug("Selected photo ${nextPhoto.photo.id} (score: ${nextPhoto.totalScore}, scene: ${signals.sceneType})")
-
-                scoredPhotos = scoredPhotos.drop(1).map { photoScore ->
-                    scorePhoto(photoScore.photo, weights, sceneTypeCounts, timeOfDayCounts)
-                }.sortedByDescending { it.totalScore }
-            } else {
-                logger.debug("Deferred photo ${nextPhoto.photo.id} (quota reached for ${signals.sceneType})")
-                skippedByQuota.add(nextPhoto.photo)
-                scoredPhotos = scoredPhotos.drop(1)
-            }
-        }
-
-        // Pass 2: fill remaining slots with best skipped photos when target scene types were absent
-        if (selected.size < diversityConfig.targetPhotos && skippedByQuota.isNotEmpty()) {
-            val remaining = diversityConfig.targetPhotos - selected.size
-            val fillPhotos = skippedByQuota
-                .map { scorePhoto(it, weights, sceneTypeCounts, timeOfDayCounts) }
-                .sortedByDescending { it.totalScore }
-                .take(remaining)
-            fillPhotos.forEach { logger.debug("Fill-selected photo ${it.photo.id} (scene: ${it.photo.signals?.sceneType})") }
-            selected.addAll(fillPhotos.map { it.photo })
-        }
-
-        return selected
-    }
-
-    /**
-     * Scores a single photo based on weighted factors.
-     */
-    private fun scorePhoto(
+    private fun adjustedScore(
         photo: Photo,
-        weights: ScoringWeights,
-        sceneTypeCounts: Map<String?, Int>,
-        timeOfDayCounts: Map<String?, Int>
-    ): PhotoScore {
-        val signals = photo.signals ?: return PhotoScore(
-            photo = photo,
-            totalScore = 0.0,
-            breakdown = ScoreBreakdown(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-        )
-        val metadata = photo.metadata
+        episodeOf: Map<UUID, Int>,
+        selected: List<Photo>,
+        perEpisodeCount: IntArray,
+        roleCount: Map<VisualRole, Int>,
+        cache: PhotoSimilarity.Cache
+    ): Double {
+        val episodeIdx = photo.id?.let { episodeOf[it] } ?: -1
+        val quality = StandaloneScorer.baseScore(photo)
 
-        // 1. Aesthetic Score (0.0 - 1.0)
-        val aestheticScore = signals.aestheticScore * weights.aestheticWeight
-
-        // 2. Sharpness Score (inverse of blur)
-        val sharpnessScore = (1.0 - signals.blurScore) * weights.sharpnessWeight
-
-        // 3. Scene Variety Bonus
-        val sceneCount = sceneTypeCounts[signals.sceneType] ?: 0
-        val sceneVarietyScore = calculateVarietyBonus(sceneCount) * weights.sceneVarietyBonus
-
-        // 4. Time Variety Bonus
-        val timeCount = timeOfDayCounts[signals.timeOfDay] ?: 0
-        val timeVarietyScore = calculateVarietyBonus(timeCount) * weights.timeVarietyBonus
-
-        // 5. Orientation Preference
-        val orientation = Orientation.from(metadata.width, metadata.height)
-        val orientationScore = when (orientation) {
-            Orientation.LANDSCAPE -> 1.0
-            Orientation.PORTRAIT -> 0.7
-            Orientation.SQUARE -> 0.5
-        } * weights.orientationPreference
-
-        // 6. Lighting Preference
-        val lightingScore = when (signals.timeOfDay) {
-            "golden_hour" -> 1.0
-            "day" -> 0.8
-            "night" -> 0.6
-            else -> 0.5
-        } * weights.lightingPreference
-
-        val totalScore = aestheticScore + sharpnessScore + sceneVarietyScore +
-                        timeVarietyScore + orientationScore + lightingScore
-
-        return PhotoScore(
-            photo = photo,
-            totalScore = totalScore,
-            breakdown = ScoreBreakdown(
-                aestheticScore = aestheticScore,
-                sharpnessScore = sharpnessScore,
-                sceneVarietyScore = sceneVarietyScore,
-                timeVarietyScore = timeVarietyScore,
-                orientationScore = orientationScore,
-                lightingScore = lightingScore
-            )
-        )
-    }
-
-    /**
-     * Calculates variety bonus inversely proportional to count.
-     * More of a category → lower bonus.
-     */
-    private fun calculateVarietyBonus(count: Int): Double {
-        return when {
-            count == 0 -> 1.0
-            count <= 2 -> 0.9
-            count <= 5 -> 0.7
-            count <= 10 -> 0.4
-            else -> 0.0
+        // Uniqueness relative to already-selected photos in the same episode.
+        val selectedInEpisode = selected.filter { sel ->
+            episodeIdx >= 0 && sel.id?.let { episodeOf[it] } == episodeIdx
         }
+        val uniqueness = if (selectedInEpisode.isEmpty()) 1.0
+        else (1.0 - selectedInEpisode.map { cache.similarity(photo, it) }.average()).coerceIn(0.0, 1.0)
+
+        // Similarity penalty: closeness to the most-similar already-selected photo anywhere.
+        val similarityPenalty = if (selected.isEmpty()) 0.0
+        else selected.maxOf { cache.similarity(photo, it) }
+
+        val epCount = if (episodeIdx in perEpisodeCount.indices) perEpisodeCount[episodeIdx] else 0
+        val underrepBonus = 1.0 / (1.0 + epCount)
+
+        val episodeSatPenalty = epCount * EPISODE_SAT_STEP
+        val role = VisualRole.of(photo)
+        val roleMult = if (role in VisualRole.HEAVILY_PENALIZED) ROLE_SAT_HEAVY_MULT else 1.0
+        val roleSatPenalty = (roleCount[role] ?: 0) * ROLE_SAT_STEP * roleMult
+
+        return W_QUALITY * quality +
+            W_UNIQUENESS * uniqueness +
+            W_UNDERREP * underrepBonus -
+            W_SIMILARITY * similarityPenalty -
+            episodeSatPenalty -
+            roleSatPenalty
     }
 
     /**
-     * Calculates statistics for the final selection.
+     * Calculates statistics for the final selection (unchanged shape).
      */
     private fun calculateStats(photos: List<Photo>): SelectionStats {
         val sceneTypeCounts = photos.groupingBy { it.signals?.sceneType }.eachCount()
         val timeOfDayCounts = photos.groupingBy { it.signals?.timeOfDay }.eachCount()
-        val avgAesthetic = photos.mapNotNull { it.signals?.aestheticScore }.average()
-        val avgBlur = photos.mapNotNull { it.signals?.blurScore }.average()
+        val avgAesthetic = photos.mapNotNull { it.signals?.aestheticScore }.average().takeIf { !it.isNaN() } ?: 0.0
+        val avgBlur = photos.mapNotNull { it.signals?.blurScore }.average().takeIf { !it.isNaN() } ?: 0.0
 
         return SelectionStats(
             totalPhotos = photos.size,
@@ -400,15 +295,14 @@ data class QualityThresholds(
 )
 
 /**
- * Configuration for burst detection.
+ * Configuration for burst detection (near-duplicate time window).
  */
 data class BurstConfig(
     val timeWindowSeconds: Long = 10
 )
 
 /**
- * Configuration for scoring weights.
- * All weights should sum to ~1.0 for normalized scores.
+ * Configuration for scoring weights. Retained for the score explainer / diagnostics.
  */
 data class ScoringWeights(
     val aestheticWeight: Double = 0.50,
@@ -420,7 +314,7 @@ data class ScoringWeights(
 )
 
 /**
- * Configuration for diversity-aware selection.
+ * Configuration for diversity-aware selection. Retained for diagnostics/compatibility.
  */
 data class DiversityConfig(
     val targetPhotos: Int = 30,
@@ -439,21 +333,7 @@ data class DiversityConfig(
 )
 
 /**
- * A burst of photos taken in rapid succession.
- */
-data class Burst(
-    val photos: List<Photo>,
-    val startTime: Instant,
-    val endTime: Instant
-) {
-    fun getBestPhoto(): Photo {
-        return photos.maxByOrNull { it.signals?.aestheticScore ?: 0.0 }
-            ?: photos.first()
-    }
-}
-
-/**
- * Photo with computed score and breakdown.
+ * Photo with computed score and breakdown (used by PhotoScoreExplainer/diagnostics).
  */
 data class PhotoScore(
     val photo: Photo,
