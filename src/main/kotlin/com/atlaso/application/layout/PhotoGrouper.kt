@@ -156,9 +156,11 @@ class PhotoGrouper {
      * as strong. The episode's overall best photo is *protected* so normalization can
      * never drop an event entirely (req: reserve ≥1 usable photo from every event).
      *
-     * The rest become "surplus". Book length is fixed, so if kept photos fall short of
-     * what a good book needs we relax dedup: pull the highest-scoring surplus (i.e. the
-     * best near-duplicates) back in — never low-quality padding.
+     * The rest — extra near-duplicates and any below-bar (weak) shots — become "surplus".
+     * Weak shots are omitted so the book is built from strong images (req A); only each
+     * event's protected coverage photo survives if it happens to be weak. If kept photos
+     * fall short of a good book, we relax dedup by pulling the strongest surplus (best
+     * near-duplicates) back in — never weak padding.
      */
     private fun curate(
         episodes: List<List<Photo>>,
@@ -190,15 +192,26 @@ class PhotoGrouper {
                     }
                 }
             }
-            keptByEpisode.add(kept)
+
+            // Req A: omit weak shots entirely — a book is built from strong images, not
+            // padded with mediocre ones. A below-bar photo is dropped (→ surplus) unless it
+            // is the event's protected coverage photo, so every event still keeps one shot.
+            val strong = mutableListOf<Photo>()
+            for (p in kept) {
+                if (isGridWorthy(p) || p.id in protectedIds) strong.add(p)
+                else p.id?.let(surplusIds::add)
+            }
+            keptByEpisode.add(strong)
         }
 
         val keptCount = keptByEpisode.sumOf { it.size }
         val desired = minOf(available, (targetPages * FILL_RATIO).toInt())
         if (keptCount < desired && surplusIds.isNotEmpty()) {
             val need = desired - keptCount
+            // Pull back only strong surplus (the best near-duplicates) to fill the book —
+            // never weak shots, which stay omitted (req A).
             val addBack = episodes.flatten()
-                .filter { it.id in surplusIds }
+                .filter { it.id in surplusIds && isGridWorthy(it) }
                 .sortedByDescending { scores[it.id] ?: 0.0 }
                 .take(need)
                 .mapNotNull { it.id }
@@ -259,7 +272,8 @@ class PhotoGrouper {
                     pages.add(DraftPage(mutableListOf(photo), isHero = true, eventIndex = eventIndex))
                 }
                 !isGridWorthy(photo) -> {
-                    // Weak shot: keep it, but solo — never in a grid.
+                    // Coverage exception: weak shots are omitted in curate(), so one only
+                    // reaches here as an event's sole kept photo — place it solo, never gridded.
                     flush()
                     pages.add(DraftPage(mutableListOf(photo), isHero = false, eventIndex = eventIndex))
                 }

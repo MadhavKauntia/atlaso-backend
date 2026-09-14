@@ -82,15 +82,14 @@ class PhotoGrouperTest {
     }
 
     @Test
-    fun `weak photos are biased to solo pages, not grids`() {
-        // Req A: grids are gated by quality. A third of these shots are below the grid
-        // aesthetic bar; with the book at a normal density they should land on solo pages,
-        // not pad out collages. (At extreme photo counts grids become unavoidable to fit
-        // the page budget — that's expected; this covers the everyday case.)
+    fun `weak photos are omitted, not padded into the book`() {
+        // Req A: a book is built from strong images. A third of these shots are below the
+        // quality bar; with strong photos available they should be omitted, not shown at all.
         val subjects = listOf("person", "landscape", "architecture", "food", "activity")
         val shots = listOf("wide", "medium", "closeup")
         val places = listOf("beach", "mountain", "city_street", "market", "temple", "park")
         val weakIds = mutableSetOf<UUID>()
+        val strongIds = mutableSetOf<UUID>()
         var t = base
         val photos = (0 until 60).map { i ->
             t = if (i > 0 && i % 8 == 0) t.plusSeconds(3 * 3600L) else t.plusSeconds(90L)
@@ -102,18 +101,18 @@ class PhotoGrouperTest {
                 shotDistance = shots[i % shots.size],
                 facesCount = if (subjects[i % subjects.size] == "person") 1 else 0,
                 locationTag = places[(i / 8) % places.size]
-            ).also { if (weak) weakIds.add(it.id!!) }
+            ).also { if (weak) weakIds.add(it.id!!) else strongIds.add(it.id!!) }
         }
 
         val groups = grouper.group(photos)
 
-        val grids = groups.filter { it.photos.size >= 2 }
-        assertTrue(grids.isNotEmpty()) { "expected some grid pages to exist" }
-        val weakOnGrid = grids.sumOf { g -> g.photos.count { it.id in weakIds } }
-        val weakOnSolo = groups.filter { it.photos.size == 1 }.count { it.photos[0].id in weakIds }
-        assertTrue(weakOnSolo > weakOnGrid) {
-            "weak photos should mostly be solo: solo=$weakOnSolo grid=$weakOnGrid"
+        val placed = groups.flatMap { it.photos }.mapNotNull { it.id }.toSet()
+        val weakPlaced = weakIds.count { it in placed }
+        val strongPlaced = strongIds.count { it in placed }
+        assertTrue(weakPlaced <= weakIds.size / 2) {
+            "most weak shots should be omitted, not padded in: placed $weakPlaced of ${weakIds.size}"
         }
+        assertTrue(strongPlaced > weakPlaced) { "the book should be built from strong images" }
     }
 
     /**
