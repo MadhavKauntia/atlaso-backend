@@ -2,6 +2,9 @@ package com.atlaso.service
 
 import java.io.InputStream
 
+/** Object metadata from a HEAD, used to verify a client-declared upload actually landed. */
+data class ObjectHead(val contentLength: Long, val contentType: String?)
+
 interface StorageService {
     fun store(key: String, inputStream: InputStream, contentType: String): String
     fun load(key: String): ByteArray
@@ -9,6 +12,6 @@ interface StorageService {
     fun getUploadUrl(key: String, contentType: String, contentLength: Long): String
     fun delete(key: String)
 
-    /** True if an object exists at [key] (HEAD). Used to verify a client-declared upload landed. */
-    fun exists(key: String): Boolean
+    /** HEAD metadata for the object at [key], or null if it doesn't exist. */
+    fun head(key: String): ObjectHead?
 }

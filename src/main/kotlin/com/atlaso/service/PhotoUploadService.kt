@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.multipart.MultipartFile
 import java.io.ByteArrayInputStream
 import java.nio.file.Files
+import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -49,8 +50,12 @@ class PhotoUploadService(
 
         /** Caps that protect storage and (mainly) per-book vision-analysis cost. */
         const val MAX_PHOTOS_PER_TRIP = 1000
+        const val MAX_UPLOAD_BATCH = 100 // photos per single initiate call
         const val MAX_FILE_SIZE_BYTES = 50L * 1024 * 1024 // 50 MB
         const val MAX_IMAGE_DIMENSION = 30000 // sanity cap on client-declared width/height
+        // Outstanding (unconsumed) grants count toward the trip quota until they expire, so a
+        // caller can't mint unlimited reservations by never confirming.
+        val GRANT_TTL: Duration = Duration.ofHours(24)
     }
 
     fun uploadPhoto(tripId: UUID, file: MultipartFile, userId: UUID): Photo {
@@ -131,8 +136,16 @@ class PhotoUploadService(
 
     fun initiateUploads(tripId: UUID, requests: List<InitiateUploadRequest>, userId: UUID? = null, guestToken: String? = null): List<InitiateUploadResponse> {
         tripService.assertTripAccess(tripId, userId, guestToken) // owner JWT (claimed) or guest token
-        val existing = photoRepository.countByTripId(tripId)
-        if (existing + requests.size > MAX_PHOTOS_PER_TRIP) {
+        require(requests.isNotEmpty() && requests.size <= MAX_UPLOAD_BATCH) {
+            "Between 1 and $MAX_UPLOAD_BATCH photos may be initiated per request."
+        }
+        // Quota counts confirmed photos AND outstanding (unexpired, unconsumed) reservations, so
+        // repeatedly calling initiate without confirming can't mint unbounded uploads.
+        val confirmed = photoRepository.countByTripId(tripId)
+        val reserved = uploadGrantRepository.countByTripIdAndConsumedFalseAndCreatedAtAfter(
+            tripId, Instant.now().minus(GRANT_TTL)
+        )
+        if (confirmed + reserved + requests.size > MAX_PHOTOS_PER_TRIP) {
             throw IllegalArgumentException("A book can hold at most $MAX_PHOTOS_PER_TRIP photos.")
         }
         return requests.map { req ->
@@ -198,8 +211,13 @@ class PhotoUploadService(
             require(!grant.consumed) { "This upload was already confirmed" }
             require(grant.storageKey == conf.storageKey) { "Storage key does not match the initiated upload" }
             require(grant.thumbnailKey == conf.thumbnailStorageKey) { "Thumbnail key does not match the initiated upload" }
-            require(storageService.exists(grant.storageKey)) { "Uploaded object not found" }
-            grant.thumbnailKey?.let { require(storageService.exists(it)) { "Thumbnail object not found" } }
+            // HEAD the object: it must exist and its actual size must match what was reserved
+            // (the presigned PUT bound Content-Length, so a mismatch means it wasn't the real upload).
+            val head = storageService.head(grant.storageKey) ?: throw IllegalArgumentException("Uploaded object not found")
+            require(head.contentLength == grant.maxSizeBytes) { "Uploaded object size does not match the initiated upload" }
+            grant.thumbnailKey?.let {
+                require(storageService.head(it) != null) { "Thumbnail object not found" }
+            }
             grant.consumed = true
             uploadGrantRepository.save(grant)
 

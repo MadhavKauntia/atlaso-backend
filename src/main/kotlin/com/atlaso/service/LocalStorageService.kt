@@ -49,7 +49,11 @@ class LocalStorageService(
         logger.info("Deleted file at: {}", filePath)
     }
 
-    override fun exists(key: String): Boolean = Files.exists(resolveFilePath(key))
+    override fun head(key: String): ObjectHead? {
+        val path = resolveFilePath(key)
+        if (!Files.exists(path)) return null
+        return ObjectHead(contentLength = Files.size(path), contentType = Files.probeContentType(path))
+    }
 
     /**
      * Resolves [key] under the storage base directory, guarding against path traversal:
