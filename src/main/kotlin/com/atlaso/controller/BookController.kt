@@ -35,8 +35,10 @@ class BookController(
         @AuthenticationPrincipal jwt: Jwt
     ): ResponseEntity<BookResponse> {
         val userId = UUID.fromString(jwt.subject)
-        val book = bookGenerationService.generateBook(tripId, userId)
-        return ResponseEntity.status(HttpStatus.CREATED).body(BookResponse.from(book))
+        // Async: returns a GENERATING book immediately; the client polls GET /books/{id}
+        // until status is READY_FOR_PREVIEW (or FAILED).
+        val book = bookGenerationService.startGeneration(tripId, userId)
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(BookResponse.from(book))
     }
 
     @GetMapping("/trips/{tripId}/book")
@@ -65,8 +67,9 @@ class BookController(
         @AuthenticationPrincipal jwt: Jwt
     ): ResponseEntity<BookResponse> {
         val userId = UUID.fromString(jwt.subject)
-        val book = bookGenerationService.regenerateBook(bookId, userId)
-        return ResponseEntity.status(HttpStatus.CREATED).body(BookResponse.from(book))
+        // Async: returns a fresh GENERATING book immediately; the client polls until ready.
+        val book = bookGenerationService.startRegeneration(bookId, userId)
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(BookResponse.from(book))
     }
 
     @PostMapping("/books/{bookId}/export")
