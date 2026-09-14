@@ -71,16 +71,16 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
         // Req 2: no layout repeated on more than 2 consecutive pages (windowed reorder).
         breakLayoutRuns(planned, allowSwap = true)
 
-        // Opening: prefer an establishing/arrival single at the front.
+        // Opening: prefer an establishing/arrival single at the front (movable pages only).
         if (planned.isNotEmpty() && !isEstablishing(planned[0])) {
-            val idx = (1 until minOf(4, planned.size)).firstOrNull { isEstablishing(planned[it]) }
+            val idx = (1 until minOf(4, planned.size)).firstOrNull { isEstablishing(planned[it]) && isMovable(planned, it) }
             if (idx != null) planned.add(0, planned.removeAt(idx))
         }
 
-        // Ending: prefer a quiet/scenic single at the end.
+        // Ending: prefer a quiet/scenic single at the end (movable pages only).
         if (planned.size >= 2 && !isQuiet(planned.last())) {
             val from = maxOf(0, planned.size - 4)
-            val idx = (from until planned.size - 1).lastOrNull { isQuiet(planned[it]) }
+            val idx = (from until planned.size - 1).lastOrNull { isQuiet(planned[it]) && isMovable(planned, it) }
             if (idx != null) planned.add(planned.removeAt(idx))
         }
 
@@ -94,6 +94,9 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
         // Req 1: at most one spread with two dense (3-4 photo) pages; otherwise pair a
         // dense page with a solo so facing collages don't clutter the spread.
         capDenseSpreads(planned)
+
+        // Req B: pull same-event pairs onto a single spread so events aren't split by a turn.
+        avoidEventTurnBreaks(planned)
 
         // Req 2 (touch-up): reordering above may have re-created a run of identical
         // layouts. Break any remaining runs in place (layout-variant flips only) so we
@@ -118,6 +121,51 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
     /** A "dense" page carries a 3- or 4-photo collage. */
     private fun isDense(p: Planned): Boolean = p.group.photos.size >= 3
 
+    // ─── Event coherence (req B) ───────────────────────────────────────────────
+    // Pages carry the episode (event) they came from. Pacing swaps must not tear a
+    // multi-page event apart, and a small event should not straddle a page turn.
+
+    private fun eventOf(p: Planned): Int = p.group.eventIndex
+
+    /**
+     * True when the page at [i] is alone in its event within the current order — either its
+     * event is unknown (-1, e.g. test groups) or neither neighbour shares its event. Only
+     * singleton pages may be freely moved by pacing; moving a page out of a multi-page event
+     * would split it across the book, which req B forbids.
+     */
+    private fun isMovable(planned: List<Planned>, i: Int): Boolean {
+        val e = eventOf(planned[i])
+        if (e < 0) return true
+        val leftSame = i > 0 && eventOf(planned[i - 1]) == e
+        val rightSame = i < planned.size - 1 && eventOf(planned[i + 1]) == e
+        return !leftSame && !rightSame
+    }
+
+    /**
+     * Req B: keep a same-event pair inside one spread. A 2-page event whose left page sits
+     * at an even index straddles a page turn (turns fall after pages 1,3,5… — even indices).
+     * When the page just before it is freely movable, rotate that page to just after the
+     * event so the pair shifts onto a single spread. Best-effort, one forward pass.
+     */
+    private fun avoidEventTurnBreaks(planned: MutableList<Planned>) {
+        var i = 0
+        while (i < planned.size) {
+            val e = eventOf(planned[i])
+            if (e < 0) { i++; continue }
+            var end = i
+            while (end + 1 < planned.size && eventOf(planned[end + 1]) == e) end++
+            val size = end - i + 1
+            // A 2-page event starting on an even index (>0) is split by the turn after it.
+            if (size == 2 && i > 0 && i % 2 == 0 && isMovable(planned, i - 1) &&
+                eventOf(planned[i - 1]) != e
+            ) {
+                val before = planned.removeAt(i - 1)
+                planned.add(i + 1, before) // event now starts at i-1 (odd) → one spread
+            }
+            i = end + 1
+        }
+    }
+
     /**
      * Req 2: break any run of 3+ identical layouts. First try flipping the middle page
      * to a same-photo-count layout variant (e.g. SINGLE_FULL ↔ SINGLE_FRAMED). When no
@@ -133,10 +181,11 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
                 planned[i - 1].layout = sibling
                 continue
             }
-            if (!allowSwap) continue
+            if (!allowSwap || !isMovable(planned, i)) continue
 
-            // Pull the nearest later page with a different layout into position i.
-            val j = (i + 1 until minOf(i + 4, planned.size)).firstOrNull { planned[it].layout != planned[i].layout }
+            // Pull the nearest later movable page with a different layout into position i.
+            val j = (i + 1 until minOf(i + 4, planned.size))
+                .firstOrNull { planned[it].layout != planned[i].layout && isMovable(planned, it) }
             if (j != null) {
                 val tmp = planned[i]; planned[i] = planned[j]; planned[j] = tmp
             }
@@ -163,9 +212,11 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
             peoplelessRun++
             if (peoplelessRun <= 2) continue
 
-            val donor = (pagesInSpread.last() + 1 until planned.size).firstOrNull { isPeoplePage(planned[it]) }
+            // Only borrow a movable people page, into a movable slot, so no event is split.
+            val target = pagesInSpread.last()
+            if (!isMovable(planned, target)) continue
+            val donor = (target + 1 until planned.size).firstOrNull { isPeoplePage(planned[it]) && isMovable(planned, it) }
             if (donor != null) {
-                val target = pagesInSpread.last()
                 val tmp = planned[target]; planned[target] = planned[donor]; planned[donor] = tmp
                 peoplelessRun = 0
             }
@@ -185,7 +236,9 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
             if (isDense(planned[left]) && isDense(planned[left + 1])) {
                 if (denseSpreadBudget > 0) {
                     denseSpreadBudget--
-                } else {
+                } else if (isMovable(planned, left + 1)) {
+                    // Only relieve the spread when the dense page can move without splitting
+                    // its event; otherwise event coherence (req B) wins and we accept it.
                     val swapWith = findSoloForDensitySwap(planned, left + 1)
                     if (swapWith != null) {
                         val tmp = planned[left + 1]; planned[left + 1] = planned[swapWith]; planned[swapWith] = tmp
@@ -204,7 +257,7 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
     private fun findSoloForDensitySwap(planned: MutableList<Planned>, denseIdx: Int): Int? {
         val window = 6
         val candidates = (1 until planned.size)
-            .filter { it != denseIdx && planned[it].group.photos.size == 1 }
+            .filter { it != denseIdx && planned[it].group.photos.size == 1 && isMovable(planned, it) }
             .sortedWith(compareBy({ if (isPeoplePage(planned[it])) 1 else 0 }, { kotlin.math.abs(it - denseIdx) }))
         for (k in candidates) {
             if (kotlin.math.abs(k - denseIdx) > window) continue
@@ -227,7 +280,18 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
         if ((0 until window).any { isPeoplePage(planned[it]) }) return
         val idx = (window until planned.size).firstOrNull { isPeoplePage(planned[it]) } ?: return
         val target = if (isEstablishing(planned[0])) 1 else 0
-        planned.add(target, planned.removeAt(idx))
+        if (isMovable(planned, idx)) {
+            planned.add(target, planned.removeAt(idx))
+        } else {
+            // The people page is inside a multi-page event — move the whole event block up
+            // (req B) rather than tearing a single page out of it.
+            val e = eventOf(planned[idx])
+            var bs = idx; while (bs > 0 && eventOf(planned[bs - 1]) == e) bs--
+            var be = idx; while (be < planned.size - 1 && eventOf(planned[be + 1]) == e) be++
+            val block = ArrayList(planned.subList(bs, be + 1))
+            for (k in be downTo bs) planned.removeAt(k)
+            planned.addAll(minOf(target, planned.size), block)
+        }
     }
 
     private fun isPeoplePage(p: Planned): Boolean = p.group.photos.any { photo ->

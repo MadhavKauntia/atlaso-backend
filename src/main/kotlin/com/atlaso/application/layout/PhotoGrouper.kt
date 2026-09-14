@@ -13,7 +13,12 @@ data class PhotoGroup(
     /** Per-photo standalone_score, so LayoutEngine can size slots without recomputing. */
     val standaloneScores: Map<UUID, Double> = emptyMap(),
     /** True when this group is a single photo reserved for a large solo treatment. */
-    val isHero: Boolean = false
+    val isHero: Boolean = false,
+    /**
+     * Which episode (event) this page came from. Lets LayoutEngine keep an event's pages
+     * together and align event boundaries to page-turn boundaries. -1 means unknown.
+     */
+    val eventIndex: Int = -1
 )
 
 @Component
@@ -50,12 +55,26 @@ class PhotoGrouper {
         // leave too few photos to build a good book, we relax dedup (pull duplicates
         // back) toward this many photos rather than padding with weak images.
         private const val FILL_RATIO = 1.6
+
+        // Grids are earned by quality, not subject (req A): a photo only joins a multi-photo
+        // page if its aesthetic clears this bar. Weaker photos become solo pages instead of
+        // filling a grid, so a book thin on strong shots leans on solos rather than clutter.
+        private const val GRID_MIN_AESTHETIC = 0.55
     }
 
     /** A page under construction (before it becomes an immutable PhotoGroup). */
-    private data class DraftPage(val photos: MutableList<Photo>, var isHero: Boolean) {
+    private data class DraftPage(
+        val photos: MutableList<Photo>,
+        var isHero: Boolean,
+        /** Episode this page belongs to; -1 once it straddles a cross-event merge. */
+        var eventIndex: Int = -1
+    ) {
         val size: Int get() = photos.size
     }
+
+    /** A photo strong enough to sit in a grid; weaker ones are placed solo. */
+    private fun isGridWorthy(photo: Photo): Boolean =
+        (photo.signals?.aestheticScore ?: 0.0) >= GRID_MIN_AESTHETIC
 
     /** Result of the curation pass: kept photos per episode + the coverage-protected ids. */
     private data class Curation(val episodes: List<List<Photo>>, val protectedIds: Set<UUID>)
@@ -94,7 +113,9 @@ class PhotoGrouper {
 
         // Draft pages, episode by episode, in chronological order (each page 1–4 photos).
         val draft = mutableListOf<DraftPage>()
-        curation.episodes.forEach { ep -> if (ep.isNotEmpty()) draft.addAll(buildEpisodePages(ep, standaloneById)) }
+        curation.episodes.forEachIndexed { eventIndex, ep ->
+            if (ep.isNotEmpty()) draft.addAll(buildEpisodePages(ep, standaloneById, eventIndex))
+        }
 
         // Normalize to exactly the target page count, preserving legal sizes + coverage.
         while (draft.size > targetPages) reduceOnePage(draft, standaloneById, curation.protectedIds)
@@ -210,8 +231,12 @@ class PhotoGrouper {
     /**
      * Reserves strong standalone photos as solo pages (inline, preserving chronology)
      * and chunks the remaining photos into pages of up to [MAX_PHOTOS_PER_PAGE].
+     *
+     * Req A: a photo that isn't grid-worthy (aesthetic below [GRID_MIN_AESTHETIC]) is also
+     * emitted as its own solo page rather than filling a grid — so weak shots never clutter
+     * a collage. Only mid-strength shots are chunked into grids.
      */
-    private fun buildEpisodePages(episode: List<Photo>, scores: Map<UUID, Double>): List<DraftPage> {
+    private fun buildEpisodePages(episode: List<Photo>, scores: Map<UUID, Double>, eventIndex: Int): List<DraftPage> {
         val heroIds = episode.filter { (scores[it.id] ?: 0.0) >= HERO_THRESHOLD }.mapNotNull { it.id }.toMutableSet()
         // If nothing cleared the bar, still let a decent episode's best photo be a hero.
         // Req 6: even a 2-photo episode may promote its best to a full-bleed solo.
@@ -224,15 +249,21 @@ class PhotoGrouper {
         var buffer = mutableListOf<Photo>()
         fun flush() {
             if (buffer.isEmpty()) return
-            buffer.chunked(MAX_PHOTOS_PER_PAGE).forEach { pages.add(DraftPage(it.toMutableList(), isHero = false)) }
+            buffer.chunked(MAX_PHOTOS_PER_PAGE).forEach { pages.add(DraftPage(it.toMutableList(), isHero = false, eventIndex = eventIndex)) }
             buffer = mutableListOf()
         }
         for (photo in episode) {
-            if (photo.id in heroIds) {
-                flush()
-                pages.add(DraftPage(mutableListOf(photo), isHero = true))
-            } else {
-                buffer.add(photo)
+            when {
+                photo.id in heroIds -> {
+                    flush()
+                    pages.add(DraftPage(mutableListOf(photo), isHero = true, eventIndex = eventIndex))
+                }
+                !isGridWorthy(photo) -> {
+                    // Weak shot: keep it, but solo — never in a grid.
+                    flush()
+                    pages.add(DraftPage(mutableListOf(photo), isHero = false, eventIndex = eventIndex))
+                }
+                else -> buffer.add(photo)
             }
         }
         flush()
@@ -247,22 +278,33 @@ class PhotoGrouper {
     private fun reduceOnePage(draft: MutableList<DraftPage>, scores: Map<UUID, Double>, protectedIds: Set<UUID>) {
         if (draft.size < 2) return
 
-        data class Merge(val i: Int, val drops: Int, val heroPenalty: Int, val resultSize: Int, val combinedScore: Double)
+        data class Merge(
+            val i: Int, val drops: Int, val heroPenalty: Int, val crossEvent: Int,
+            val resultSize: Int, val weakInGrid: Int, val combinedScore: Double
+        )
 
         val best = (0 until draft.size - 1).map { i ->
             val a = draft[i]; val b = draft[i + 1]
             val sum = a.size + b.size
             val drops = (sum - MAX_PHOTOS_PER_PAGE).coerceAtLeast(0)
             val heroPenalty = (if (a.isHero) 1 else 0) + (if (b.isHero) 1 else 0)
+            val crossEvent = if (a.eventIndex != b.eventIndex) 1 else 0
+            val resultSize = minOf(sum, MAX_PHOTOS_PER_PAGE)
+            // Only a multi-photo result grids the photos; count weak ones that would land in it.
+            val weakInGrid = if (resultSize >= 2) (a.photos + b.photos).count { !isGridWorthy(it) } else 0
             val combined = a.photos.sumOf { scores[it.id] ?: 0.0 } + b.photos.sumOf { scores[it.id] ?: 0.0 }
-            Merge(i, drops, heroPenalty, minOf(sum, MAX_PHOTOS_PER_PAGE), combined)
+            Merge(i, drops, heroPenalty, crossEvent, resultSize, weakInGrid, combined)
         }
-        // Prefer merges that drop nothing, keep heroes, and — for req 6 — produce the
-        // lightest resulting page so grids form only when unavoidable; break ties on score.
-        .minWithOrNull(compareBy({ it.drops }, { it.heroPenalty }, { it.resultSize }, { it.combinedScore }))!!
+        // Prefer merges that: drop nothing, keep heroes, stay within one event (req B),
+        // keep weak shots out of grids so strong photos absorb the gridding (req A), and
+        // produce the lightest page (req 6); break remaining ties on combined score.
+        .minWithOrNull(compareBy(
+            { it.drops }, { it.heroPenalty }, { it.crossEvent }, { it.weakInGrid }, { it.resultSize }, { it.combinedScore }
+        ))!!
 
         val i = best.i
-        val all = draft[i].photos + draft[i + 1].photos
+        val a = draft[i]; val b = draft[i + 1]
+        val all = a.photos + b.photos
         val (protectedPhotos, others) = all.partition { it.id in protectedIds }
         // Keep as many as fit (up to the max), coverage-protected photos first.
         val keepCount = minOf(all.size, MAX_PHOTOS_PER_PAGE)
@@ -270,7 +312,13 @@ class PhotoGrouper {
             .take(keepCount)
             .toMutableList()
 
-        draft[i] = DraftPage(kept, isHero = keepCount == 1 && (draft[i].isHero || draft[i + 1].isHero))
+        // Merged page keeps its event when both sides agree; otherwise the majority side's.
+        val mergedEvent = when {
+            a.eventIndex == b.eventIndex -> a.eventIndex
+            a.size >= b.size -> a.eventIndex
+            else -> b.eventIndex
+        }
+        draft[i] = DraftPage(kept, isHero = keepCount == 1 && (a.isHero || b.isHero), eventIndex = mergedEvent)
         draft.removeAt(i + 1)
     }
 
@@ -287,8 +335,9 @@ class PhotoGrouper {
         val left = byTime.subList(0, mid).toMutableList()
         val right = byTime.subList(mid, byTime.size).toMutableList()
 
-        draft[idx] = DraftPage(left, isHero = isSoloHero(left, scores))
-        draft.add(idx + 1, DraftPage(right, isHero = isSoloHero(right, scores)))
+        val eventIndex = draft[idx].eventIndex
+        draft[idx] = DraftPage(left, isHero = isSoloHero(left, scores), eventIndex = eventIndex)
+        draft.add(idx + 1, DraftPage(right, isHero = isSoloHero(right, scores), eventIndex = eventIndex))
         return true
     }
 
@@ -303,7 +352,8 @@ class PhotoGrouper {
             photos = ordered,
             representativeTime = medianTime(dp.photos),
             standaloneScores = groupScores,
-            isHero = dp.isHero && ordered.size == 1
+            isHero = dp.isHero && ordered.size == 1,
+            eventIndex = dp.eventIndex
         )
     }
 

@@ -81,6 +81,41 @@ class PhotoGrouperTest {
         assertTrue(lonely.id in placed) { "Coverage violated: the only photo of an event was dropped" }
     }
 
+    @Test
+    fun `weak photos are biased to solo pages, not grids`() {
+        // Req A: grids are gated by quality. A third of these shots are below the grid
+        // aesthetic bar; with the book at a normal density they should land on solo pages,
+        // not pad out collages. (At extreme photo counts grids become unavoidable to fit
+        // the page budget — that's expected; this covers the everyday case.)
+        val subjects = listOf("person", "landscape", "architecture", "food", "activity")
+        val shots = listOf("wide", "medium", "closeup")
+        val places = listOf("beach", "mountain", "city_street", "market", "temple", "park")
+        val weakIds = mutableSetOf<UUID>()
+        var t = base
+        val photos = (0 until 60).map { i ->
+            t = if (i > 0 && i % 8 == 0) t.plusSeconds(3 * 3600L) else t.plusSeconds(90L)
+            val weak = i % 3 == 0
+            photo(
+                aesthetic = if (weak) 0.45 else 0.72,
+                takenAt = t,
+                subjectType = subjects[i % subjects.size],
+                shotDistance = shots[i % shots.size],
+                facesCount = if (subjects[i % subjects.size] == "person") 1 else 0,
+                locationTag = places[(i / 8) % places.size]
+            ).also { if (weak) weakIds.add(it.id!!) }
+        }
+
+        val groups = grouper.group(photos)
+
+        val grids = groups.filter { it.photos.size >= 2 }
+        assertTrue(grids.isNotEmpty()) { "expected some grid pages to exist" }
+        val weakOnGrid = grids.sumOf { g -> g.photos.count { it.id in weakIds } }
+        val weakOnSolo = groups.filter { it.photos.size == 1 }.count { it.photos[0].id in weakIds }
+        assertTrue(weakOnSolo > weakOnGrid) {
+            "weak photos should mostly be solo: solo=$weakOnSolo grid=$weakOnGrid"
+        }
+    }
+
     /**
      * [count] photos spread across many episodes (a fresh location + a >2h gap every 8
      * shots forces an episode break), with rotating composition so nothing dedups away.
