@@ -9,10 +9,13 @@ import com.atlaso.domain.photo.PhotoMetadata
 import com.atlaso.domain.photo.UploadGrant
 import com.atlaso.domain.trip.TripStatus
 import com.atlaso.repository.PhotoRepository
+import com.atlaso.repository.TripRepository
 import com.atlaso.repository.UploadGrantRepository
 import com.drew.imaging.ImageMetadataReader
+import com.drew.metadata.Metadata
 import com.drew.metadata.exif.ExifSubIFDDirectory
 import com.drew.metadata.exif.GpsDirectory
+import com.drew.metadata.file.FileTypeDirectory
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -33,7 +36,8 @@ class PhotoUploadService(
     private val photoRepository: PhotoRepository,
     private val storageService: StorageService,
     private val tripService: TripService,
-    private val uploadGrantRepository: UploadGrantRepository
+    private val uploadGrantRepository: UploadGrantRepository,
+    private val tripRepository: TripRepository
 ) {
     private val logger = LoggerFactory.getLogger(PhotoUploadService::class.java)
 
@@ -49,10 +53,12 @@ class PhotoUploadService(
         private val HEIC_CONTENT_TYPES = setOf("image/heic", "image/heif")
 
         /** Caps that protect storage and (mainly) per-book vision-analysis cost. */
-        const val MAX_PHOTOS_PER_TRIP = 1000
-        const val MAX_UPLOAD_BATCH = 100 // photos per single initiate call
-        const val MAX_FILE_SIZE_BYTES = 50L * 1024 * 1024 // 50 MB
-        const val MAX_IMAGE_DIMENSION = 30000 // sanity cap on client-declared width/height
+        const val MAX_PHOTOS_PER_TRIP = 300
+        const val MAX_UPLOAD_BATCH = 100 // photos per single initiate/confirm call
+        const val MAX_FILE_SIZE_BYTES = 50L * 1024 * 1024 // 50 MB per object
+        const val MAX_BYTES_PER_TRIP = 3L * 1024 * 1024 * 1024 // 3 GB cumulative (confirmed + reserved)
+        const val MAX_IMAGE_DIMENSION = 30000 // per-side pixel cap
+        const val MAX_IMAGE_PIXELS = 100_000_000L // 100 MP — guards the decoder/PDF pipeline
         // Outstanding (unconsumed) grants count toward the trip quota until they expire, so a
         // caller can't mint unlimited reservations by never confirming.
         val GRANT_TTL: Duration = Duration.ofHours(24)
@@ -139,23 +145,35 @@ class PhotoUploadService(
         require(requests.isNotEmpty() && requests.size <= MAX_UPLOAD_BATCH) {
             "Between 1 and $MAX_UPLOAD_BATCH photos may be initiated per request."
         }
-        // Quota counts confirmed photos AND outstanding (unexpired, unconsumed) reservations, so
-        // repeatedly calling initiate without confirming can't mint unbounded uploads.
-        val confirmed = photoRepository.countByTripId(tripId)
-        val reserved = uploadGrantRepository.countByTripIdAndConsumedFalseAndCreatedAtAfter(
-            tripId, Instant.now().minus(GRANT_TTL)
-        )
-        if (confirmed + reserved + requests.size > MAX_PHOTOS_PER_TRIP) {
-            throw IllegalArgumentException("A book can hold at most $MAX_PHOTOS_PER_TRIP photos.")
-        }
-        return requests.map { req ->
-            if (req.contentType !in ALLOWED_CONTENT_TYPES) {
-                throw IllegalArgumentException("Unsupported file type: ${req.contentType}")
-            }
+        // Validate every request up front (type + sizes) before reserving anything.
+        requests.forEach { req ->
+            require(req.contentType in ALLOWED_CONTENT_TYPES) { "Unsupported file type: ${req.contentType}" }
             require(req.fileSize in 1..MAX_FILE_SIZE_BYTES) {
                 "Each photo must be between 1 byte and ${MAX_FILE_SIZE_BYTES / (1024 * 1024)} MB."
             }
             req.thumbnailFileSize?.let { require(it in 1..MAX_FILE_SIZE_BYTES) { "Invalid thumbnail size" } }
+        }
+
+        // Atomic reservation: row-lock the trip so concurrent initiate calls can't each observe
+        // the same free capacity and overshoot the count/byte quota.
+        tripRepository.findByIdForUpdate(tripId).orElseThrow { TripNotFoundException(tripId) }
+        val cutoff = Instant.now().minus(GRANT_TTL)
+
+        // Quota counts confirmed photos AND outstanding (unexpired, unconsumed) reservations.
+        val usedCount = photoRepository.countByTripId(tripId) +
+            uploadGrantRepository.countByTripIdAndConsumedFalseAndCreatedAtAfter(tripId, cutoff)
+        if (usedCount + requests.size > MAX_PHOTOS_PER_TRIP) {
+            throw IllegalArgumentException("A book can hold at most $MAX_PHOTOS_PER_TRIP photos.")
+        }
+        // Cumulative byte quota: confirmed bytes + reserved bytes + this batch.
+        val usedBytes = photoRepository.sumFileSizeByTripId(tripId) +
+            uploadGrantRepository.sumReservedBytes(tripId, cutoff)
+        val batchBytes = requests.sumOf { it.fileSize + (it.thumbnailFileSize ?: 0L) }
+        if (usedBytes + batchBytes > MAX_BYTES_PER_TRIP) {
+            throw IllegalArgumentException("Uploads for this trip exceed the ${MAX_BYTES_PER_TRIP / (1024 * 1024 * 1024)} GB limit.")
+        }
+
+        return requests.map { req ->
             val ext = when (req.contentType) {
                 "image/jpeg" -> "jpg"
                 "image/png" -> "png"
@@ -184,6 +202,7 @@ class PhotoUploadService(
                     thumbnailKey = thumbKey,
                     contentType = req.contentType,
                     maxSizeBytes = req.fileSize,
+                    thumbnailMaxSizeBytes = req.thumbnailFileSize,
                 )
             )
             InitiateUploadResponse(
@@ -198,28 +217,37 @@ class PhotoUploadService(
 
     fun confirmUploads(tripId: UUID, confirmations: List<ConfirmUploadRequest>, userId: UUID? = null, guestToken: String? = null): List<Photo> {
         tripService.assertTripAccess(tripId, userId, guestToken) // owner JWT (claimed) or guest token
-        val trip = tripService.getTrip(tripId)
-        val existing = photoRepository.countByTripId(tripId)
-        if (existing + confirmations.size > MAX_PHOTOS_PER_TRIP) {
-            throw IllegalArgumentException("A book can hold at most $MAX_PHOTOS_PER_TRIP photos.")
+        require(confirmations.isNotEmpty() && confirmations.size <= MAX_UPLOAD_BATCH) {
+            "Between 1 and $MAX_UPLOAD_BATCH photos may be confirmed per request."
         }
+        val trip = tripService.getTrip(tripId)
+        val cutoff = Instant.now().minus(GRANT_TTL)
         val photos = confirmations.map { conf ->
             // Bind to the server-recorded initiation: only a key we handed out for THIS photo
-            // on THIS trip can be confirmed, once, and the object must actually exist.
+            // on THIS trip can be confirmed, once, before it expires.
             val grant = uploadGrantRepository.findByPhotoIdAndTripId(conf.photoId, tripId)
                 ?: throw IllegalArgumentException("No upload was initiated for this photo")
-            require(!grant.consumed) { "This upload was already confirmed" }
+            require(grant.createdAt.isAfter(cutoff)) { "This upload has expired — please re-upload" }
             require(grant.storageKey == conf.storageKey) { "Storage key does not match the initiated upload" }
             require(grant.thumbnailKey == conf.thumbnailStorageKey) { "Thumbnail key does not match the initiated upload" }
-            // HEAD the object: it must exist and its actual size must match what was reserved
-            // (the presigned PUT bound Content-Length, so a mismatch means it wasn't the real upload).
+
+            // HEAD main object: exists, exact reserved size, and (soft) content-type match.
             val head = storageService.head(grant.storageKey) ?: throw IllegalArgumentException("Uploaded object not found")
             require(head.contentLength == grant.maxSizeBytes) { "Uploaded object size does not match the initiated upload" }
-            grant.thumbnailKey?.let {
-                require(storageService.head(it) != null) { "Thumbnail object not found" }
+            head.contentType?.substringBefore(';')?.trim()?.let { actual ->
+                require(actual.equals(grant.contentType, ignoreCase = true)) { "Uploaded object content type mismatch" }
             }
-            grant.consumed = true
-            uploadGrantRepository.save(grant)
+            // HEAD thumbnail: exists and matches the reserved thumbnail size.
+            grant.thumbnailKey?.let { tk ->
+                val th = storageService.head(tk) ?: throw IllegalArgumentException("Thumbnail object not found")
+                grant.thumbnailMaxSizeBytes?.let { require(th.contentLength == it) { "Thumbnail size does not match the initiated upload" } }
+            }
+
+            // Validate the actual bytes are a real image of an allowed format with safe dimensions.
+            val dims = validateImageObject(grant.storageKey)
+
+            // Atomically consume the grant — only one concurrent confirm can win, enforcing one-time use.
+            require(uploadGrantRepository.markConsumed(grant.id!!) == 1) { "This upload was already confirmed" }
 
             val takenAt = conf.takenAt?.let { Instant.ofEpochMilli(it) }
             Photo(
@@ -230,8 +258,9 @@ class PhotoUploadService(
                 contentType = grant.contentType,        // server-recorded content type
                 fileSize = grant.maxSizeBytes,          // presigned PUT bound Content-Length to this
                 metadata = PhotoMetadata(
-                    width = conf.width.coerceIn(0, MAX_IMAGE_DIMENSION),
-                    height = conf.height.coerceIn(0, MAX_IMAGE_DIMENSION),
+                    // Server-validated dimensions when available, else the (capped) client values.
+                    width = dims?.first ?: conf.width.coerceIn(0, MAX_IMAGE_DIMENSION),
+                    height = dims?.second ?: conf.height.coerceIn(0, MAX_IMAGE_DIMENSION),
                     takenAt = takenAt,
                     location = if (conf.latitude != null && conf.longitude != null)
                         GeoLocation(conf.latitude, conf.longitude) else null,
@@ -245,6 +274,50 @@ class PhotoUploadService(
             tripService.updateStatus(tripId, TripStatus.UPLOADING_PHOTOS)
         }
         return saved
+    }
+
+    /**
+     * Downloads the object and verifies it is a genuine image (of a recognized image format)
+     * with safe dimensions — so arbitrary bytes merely labeled as an image can't enter the
+     * vision/PDF pipeline. Returns the parsed (width, height) when the format exposes it.
+     */
+    private fun validateImageObject(storageKey: String): Pair<Int, Int>? {
+        val bytes = storageService.load(storageKey)
+        val metadata: Metadata = try {
+            ImageMetadataReader.readMetadata(ByteArrayInputStream(bytes))
+        } catch (e: Exception) {
+            throw IllegalArgumentException("Uploaded file is not a valid image")
+        }
+        val mime = metadata.getFirstDirectoryOfType(FileTypeDirectory::class.java)
+            ?.getString(FileTypeDirectory.TAG_DETECTED_FILE_MIME_TYPE)
+        require(mime != null && mime.startsWith("image/")) { "Uploaded file is not an image" }
+
+        val dims = readImageDimensions(metadata)
+        if (dims != null) {
+            val (w, h) = dims
+            require(w in 1..MAX_IMAGE_DIMENSION && h in 1..MAX_IMAGE_DIMENSION) { "Image dimensions exceed the allowed maximum" }
+            require(w.toLong() * h.toLong() <= MAX_IMAGE_PIXELS) { "Image resolution exceeds the allowed maximum" }
+        }
+        return dims
+    }
+
+    /** Extracts pixel dimensions from parsed image metadata (works across JPEG/PNG/WebP/HEIF). */
+    private fun readImageDimensions(metadata: Metadata): Pair<Int, Int>? {
+        var width: Int? = null
+        var height: Int? = null
+        for (directory in metadata.directories) {
+            for (tag in directory.tags) {
+                val value = runCatching { directory.getInteger(tag.tagType) }.getOrNull()
+                if (value == null || value <= 0) continue
+                when {
+                    width == null && tag.tagName.equals("Image Width", ignoreCase = true) -> width = value
+                    height == null && tag.tagName.equals("Image Height", ignoreCase = true) -> height = value
+                }
+            }
+        }
+        val w = width
+        val h = height
+        return if (w != null && h != null) w to h else null
     }
 
     fun deletePhoto(photoId: UUID, tripId: UUID, userId: UUID) {

@@ -40,6 +40,10 @@ data class UploadGrant(
     @Column(name = "max_size_bytes", nullable = false)
     val maxSizeBytes: Long,
 
+    /** Reserved thumbnail size (bytes), null when the client didn't request a thumbnail. */
+    @Column(name = "thumbnail_max_size_bytes")
+    val thumbnailMaxSizeBytes: Long? = null,
+
     @Column(nullable = false)
     var consumed: Boolean = false,
 
