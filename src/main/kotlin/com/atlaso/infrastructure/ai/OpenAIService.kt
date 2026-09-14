@@ -39,7 +39,9 @@ data class ImageContent(
     @JsonProperty("image_url") val imageUrl: ImageUrl
 ) : Content
 
-data class ImageUrl(val url: String)
+// detail "low" downsamples to 512px server-side: far fewer image tokens and
+// faster analysis. Our coarse signals don't need full-resolution vision.
+data class ImageUrl(val url: String, val detail: String = "low")
 
 data class OpenAIResponse(
     val id: String? = null,

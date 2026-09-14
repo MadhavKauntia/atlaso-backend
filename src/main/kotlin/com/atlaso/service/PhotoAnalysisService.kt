@@ -6,6 +6,7 @@ import com.atlaso.infrastructure.ai.PhotoAnalysisResponse
 import com.atlaso.infrastructure.ai.VisionModelService
 import com.atlaso.repository.PhotoRepository
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Duration
@@ -18,10 +19,13 @@ import java.util.concurrent.Executors
 class PhotoAnalysisService(
     private val photoRepository: PhotoRepository,
     private val visionModelService: VisionModelService,
-    private val storageService: StorageService
+    private val storageService: StorageService,
+    // Concurrent vision calls. Effective parallelism = this (calls are synchronous).
+    // Ceiling is the OpenAI account tier's requests-per-minute; tune via config.
+    @Value("\${openai.api.analysis-concurrency:20}") private val concurrency: Int
 ) {
     private val logger = LoggerFactory.getLogger(PhotoAnalysisService::class.java)
-    private val executor = Executors.newFixedThreadPool(10)
+    private val executor = Executors.newFixedThreadPool(concurrency.coerceIn(1, 64))
 
     companion object {
         // A "burst" = photos taken within this window of each other. Kept tight so

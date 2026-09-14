@@ -34,6 +34,9 @@ openai:
     key: "${OPENAI_API_KEY}"
     model: gpt-4o-mini
     base-url: https://api.openai.com/v1/
+    # Concurrent vision calls during book generation. Raise if your OpenAI tier
+    # allows higher RPM; override with OPENAI_API_ANALYSIS_CONCURRENCY.
+    analysis-concurrency: ${OPENAI_API_ANALYSIS_CONCURRENCY:20}
 
 # Razorpay payment gateway
 razorpay:
