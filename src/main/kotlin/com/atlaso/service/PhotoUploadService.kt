@@ -52,13 +52,17 @@ class PhotoUploadService(
 
         private val HEIC_CONTENT_TYPES = setOf("image/heic", "image/heif")
 
-        /** Caps that protect storage and (mainly) per-book vision-analysis cost. */
-        const val MAX_PHOTOS_PER_TRIP = 300
+        /** Caps that protect storage and (mainly) per-book vision-analysis cost. Deliberately
+         *  generous — trips may hold many large DSLR-quality images. */
+        const val MAX_PHOTOS_PER_TRIP = 1000
         const val MAX_UPLOAD_BATCH = 100 // photos per single initiate/confirm call
-        const val MAX_FILE_SIZE_BYTES = 50L * 1024 * 1024 // 50 MB per object
-        const val MAX_BYTES_PER_TRIP = 3L * 1024 * 1024 * 1024 // 3 GB cumulative (confirmed + reserved)
+        const val MAX_FILE_SIZE_BYTES = 50L * 1024 * 1024 // 50 MB per object (fits high-MP DSLR JPEG/HEIC)
+        // Cumulative per-trip byte budget (confirmed + reserved). Set at the count×per-photo
+        // ceiling so it never blocks a legitimate full trip, while the atomic reservation still
+        // prevents unbounded growth from unconfirmed grants.
+        const val MAX_BYTES_PER_TRIP = 50L * 1024 * 1024 * 1024 // 50 GB
         const val MAX_IMAGE_DIMENSION = 30000 // per-side pixel cap
-        const val MAX_IMAGE_PIXELS = 100_000_000L // 100 MP — guards the decoder/PDF pipeline
+        const val MAX_IMAGE_PIXELS = 200_000_000L // 200 MP — headroom for high-res DSLR/medium-format
         // Outstanding (unconsumed) grants count toward the trip quota until they expire, so a
         // caller can't mint unlimited reservations by never confirming.
         val GRANT_TTL: Duration = Duration.ofHours(24)
