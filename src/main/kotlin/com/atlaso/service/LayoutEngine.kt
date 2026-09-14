@@ -58,18 +58,18 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
     }
 
     /**
-     * One deterministic pass to vary rhythm without breaking chronology much:
-     * break runs of 3 identical layouts by flipping the middle to its sibling
-     * variant, and prefer an establishing image first / a quiet image last.
+     * A sequence of deterministic, chronology-preserving passes that shape the book's
+     * rhythm. Each pass only makes local moves (windowed swaps or in-place layout-variant
+     * flips), so pages stay largely in chronological order (req 4). Order matters:
+     * variety first, then narrative bookends, then people cadence, then the anti-clutter
+     * density cap, then a final in-place variety touch-up so nothing regresses.
+     *
+     * Spread model: page 1 is a lone recto; facing spreads are then (2,3), (4,5), …
+     * i.e. planned index 0 is alone, and indices pair up as (1,2), (3,4), (5,6), …
      */
     private fun pacingPass(planned: MutableList<Planned>) {
-        // No 3 identical layouts in a row (also softens runs of dense collages).
-        for (i in 2 until planned.size) {
-            if (planned[i].layout == planned[i - 1].layout && planned[i - 1].layout == planned[i - 2].layout) {
-                val sibling = siblingLayout(planned[i - 1].layout, planned[i - 1].group)
-                if (sibling != null) planned[i - 1].layout = sibling
-            }
-        }
+        // Req 2: no layout repeated on more than 2 consecutive pages (windowed reorder).
+        breakLayoutRuns(planned, allowSwap = true)
 
         // Opening: prefer an establishing/arrival single at the front.
         if (planned.isNotEmpty() && !isEstablishing(planned[0])) {
@@ -87,6 +87,133 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
         // People early: establish who took the trip. Guarantee a page featuring people
         // within the first three, pulling the earliest one up if none is present.
         ensurePeopleEarly(planned)
+
+        // Req 8: never go more than 2 spreads without a people photo.
+        ensurePeopleEveryTwoSpreads(planned)
+
+        // Req 1: at most one spread with two dense (3-4 photo) pages; otherwise pair a
+        // dense page with a solo so facing collages don't clutter the spread.
+        capDenseSpreads(planned)
+
+        // Req 2 (touch-up): reordering above may have re-created a run of identical
+        // layouts. Break any remaining runs in place (layout-variant flips only) so we
+        // don't undo the density pairing.
+        breakLayoutRuns(planned, allowSwap = false)
+    }
+
+    // ─── Spread geometry ─────────────────────────────────────────────────────────
+    // planned index → page number is (index + 1). Page 1 is a lone recto; the rest
+    // pair into facing spreads (2,3), (4,5), …
+
+    /** The spread a 0-based page index belongs to (page 1 / index 0 is its own spread). */
+    private fun spreadOf(index: Int): Int = if (index <= 0) 0 else 1 + (index - 1) / 2
+
+    /** The facing-page partner index within the same spread, or null (lone recto). */
+    private fun spreadPartner(index: Int): Int? = when {
+        index <= 0 -> null            // page 1 stands alone
+        index % 2 == 1 -> index + 1   // left page → right partner
+        else -> index - 1             // right page → left partner
+    }
+
+    /** A "dense" page carries a 3- or 4-photo collage. */
+    private fun isDense(p: Planned): Boolean = p.group.photos.size >= 3
+
+    /**
+     * Req 2: break any run of 3+ identical layouts. First try flipping the middle page
+     * to a same-photo-count layout variant (e.g. SINGLE_FULL ↔ SINGLE_FRAMED). When no
+     * variant exists (grids, two-ups) and [allowSwap] is set, swap the offending page
+     * with a nearby page of a different layout, preserving chronology as much as possible.
+     */
+    private fun breakLayoutRuns(planned: MutableList<Planned>, allowSwap: Boolean) {
+        for (i in 2 until planned.size) {
+            if (planned[i].layout != planned[i - 1].layout || planned[i - 1].layout != planned[i - 2].layout) continue
+
+            val sibling = siblingLayout(planned[i - 1].layout, planned[i - 1].group)
+            if (sibling != null) {
+                planned[i - 1].layout = sibling
+                continue
+            }
+            if (!allowSwap) continue
+
+            // Pull the nearest later page with a different layout into position i.
+            val j = (i + 1 until minOf(i + 4, planned.size)).firstOrNull { planned[it].layout != planned[i].layout }
+            if (j != null) {
+                val tmp = planned[i]; planned[i] = planned[j]; planned[j] = tmp
+            }
+        }
+    }
+
+    /**
+     * Req 8: guarantee a people photo at least every two spreads. Walking spreads in
+     * order, if a third consecutive spread would have no people, swap a people page from
+     * a later spread into it. Best-effort — if no later people page exists we leave it.
+     */
+    private fun ensurePeopleEveryTwoSpreads(planned: MutableList<Planned>) {
+        if (planned.size < 2) return
+        val spreads = LinkedHashMap<Int, MutableList<Int>>()
+        planned.indices.forEach { i -> spreads.getOrPut(spreadOf(i)) { mutableListOf() }.add(i) }
+
+        var peoplelessRun = 0
+        for (key in spreads.keys.sorted()) {
+            val pagesInSpread = spreads[key]!!
+            if (pagesInSpread.any { isPeoplePage(planned[it]) }) {
+                peoplelessRun = 0
+                continue
+            }
+            peoplelessRun++
+            if (peoplelessRun <= 2) continue
+
+            val donor = (pagesInSpread.last() + 1 until planned.size).firstOrNull { isPeoplePage(planned[it]) }
+            if (donor != null) {
+                val target = pagesInSpread.last()
+                val tmp = planned[target]; planned[target] = planned[donor]; planned[donor] = tmp
+                peoplelessRun = 0
+            }
+        }
+    }
+
+    /**
+     * Req 1: a spread with two dense (3-4 photo) pages is cluttered. Allow at most one
+     * such spread in the whole book; for any beyond that, swap the right dense page with
+     * a nearby solo page so each dense collage faces a calmer solo. Best-effort within a
+     * small window to keep chronology intact.
+     */
+    private fun capDenseSpreads(planned: MutableList<Planned>) {
+        var denseSpreadBudget = 1
+        var left = 1 // first left-of-spread page is index 1 (page 2); left pages are odd indices
+        while (left + 1 < planned.size) {
+            if (isDense(planned[left]) && isDense(planned[left + 1])) {
+                if (denseSpreadBudget > 0) {
+                    denseSpreadBudget--
+                } else {
+                    val swapWith = findSoloForDensitySwap(planned, left + 1)
+                    if (swapWith != null) {
+                        val tmp = planned[left + 1]; planned[left + 1] = planned[swapWith]; planned[swapWith] = tmp
+                    }
+                }
+            }
+            left += 2
+        }
+    }
+
+    /**
+     * Finds the nearest solo (1-photo) page to swap in for the dense page at [denseIdx],
+     * such that the solo's own spread won't itself become dense-dense. Prefers non-people
+     * solos (so we don't disturb the people cadence) and closer pages.
+     */
+    private fun findSoloForDensitySwap(planned: MutableList<Planned>, denseIdx: Int): Int? {
+        val window = 6
+        val candidates = (1 until planned.size)
+            .filter { it != denseIdx && planned[it].group.photos.size == 1 }
+            .sortedWith(compareBy({ if (isPeoplePage(planned[it])) 1 else 0 }, { kotlin.math.abs(it - denseIdx) }))
+        for (k in candidates) {
+            if (kotlin.math.abs(k - denseIdx) > window) continue
+            val partner = spreadPartner(k)
+            if (partner == denseIdx) continue // already the same spread
+            val partnerIsDense = partner != null && partner in planned.indices && isDense(planned[partner])
+            if (!partnerIsDense) return k // the dense page will face a non-dense at k
+        }
+        return null
     }
 
     /**
@@ -188,7 +315,74 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
             }
             return listOf(featured) + rest
         }
+        if (layout == Layout.FOUR_GRID && photos.size == 4) {
+            return orderFourGridDiagonal(photos)
+        }
         return photos
+    }
+
+    /**
+     * Req 3: in a 2×2 grid, keep look-alikes apart. Cells map to
+     * TL=0, TR=1, BL=2, BR=3, so {0,3} and {1,2} are the two diagonals. Place the most
+     * visually similar pair (colour scheme + capture time) on the {0,3} diagonal; the
+     * remaining pair falls on {1,2}. Every cell then neighbours a photo from the other
+     * pair, so similar shots are never side-by-side or stacked.
+     */
+    private fun orderFourGridDiagonal(photos: List<Photo>): List<Photo> {
+        var bestI = 0
+        var bestJ = 1
+        var bestSim = Double.NEGATIVE_INFINITY
+        for (i in 0..3) for (j in i + 1..3) {
+            val sim = pairSimilarity(photos[i], photos[j])
+            if (sim > bestSim) { bestSim = sim; bestI = i; bestJ = j }
+        }
+        val others = (0..3).filter { it != bestI && it != bestJ }
+        // TL, TR, BL, BR → similar pair on the TL/BR diagonal.
+        return listOf(photos[bestI], photos[others[0]], photos[others[1]], photos[bestJ])
+    }
+
+    /**
+     * Visual similarity of two photos for grid placement: dominant-colour hue proximity
+     * (with a colour-temperature agreement nudge) blended with capture-time closeness.
+     * Range roughly 0.0 (unrelated) … 1.0 (near-identical look, taken together).
+     */
+    private fun pairSimilarity(a: Photo, b: Photo): Double {
+        val sa = a.signals
+        val sb = b.signals
+        var colorSim = 0.5
+        if (sa != null && sb != null) {
+            val hueA = dominantHue(sa.dominantColors)
+            val hueB = dominantHue(sb.dominantColors)
+            if (hueA != null && hueB != null) {
+                colorSim = 1.0 - circularHueDistance(hueA, hueB) / 180.0
+            }
+            if (sa.colorTemperature == sb.colorTemperature) colorSim = (colorSim + 1.0) / 2.0
+        }
+
+        val ta = a.metadata.takenAt
+        val tb = b.metadata.takenAt
+        val timeSim = if (ta != null && tb != null) {
+            val gapMinutes = kotlin.math.abs(java.time.Duration.between(ta, tb).toMinutes()).toDouble()
+            kotlin.math.exp(-gapMinutes / 30.0)
+        } else 0.0
+
+        return 0.6 * colorSim + 0.4 * timeSim
+    }
+
+    /** Hue (0–360°) of a photo's most dominant colour, or null if unparseable. */
+    private fun dominantHue(colors: List<String>): Double? {
+        val hex = colors.firstOrNull()?.trim()?.removePrefix("#") ?: return null
+        if (hex.length < 6) return null
+        val r = hex.substring(0, 2).toIntOrNull(16) ?: return null
+        val g = hex.substring(2, 4).toIntOrNull(16) ?: return null
+        val b = hex.substring(4, 6).toIntOrNull(16) ?: return null
+        return java.awt.Color.RGBtoHSB(r, g, b, null)[0] * 360.0
+    }
+
+    /** Shortest distance between two hues on the 0–360° colour wheel (0–180). */
+    private fun circularHueDistance(a: Double, b: Double): Double {
+        val d = kotlin.math.abs(a - b) % 360.0
+        return if (d > 180.0) 360.0 - d else d
     }
 
     private fun createPage(pageNumber: Int, layout: Layout, photos: List<Photo>): Page {

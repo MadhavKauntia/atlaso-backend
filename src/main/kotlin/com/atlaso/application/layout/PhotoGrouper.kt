@@ -35,8 +35,10 @@ class PhotoGrouper {
 
         // standalone_score at/above this reserves a photo as a solo page. Slightly
         // lower still qualifies for the single best photo of a decent episode.
+        // Bias toward full-bleed singles over grids (req 6): the promote bar is
+        // deliberately low so more decent photos earn a solo page.
         private const val HERO_THRESHOLD = StandaloneScorer.STRONG_THRESHOLD // 0.75
-        private const val HERO_PROMOTE_THRESHOLD = 0.68
+        private const val HERO_PROMOTE_THRESHOLD = 0.62
 
         // Near-duplicate curation (req: no more than 2 similar shots per event).
         // Within an episode, photos that share subject + people + composition + place
@@ -212,7 +214,8 @@ class PhotoGrouper {
     private fun buildEpisodePages(episode: List<Photo>, scores: Map<UUID, Double>): List<DraftPage> {
         val heroIds = episode.filter { (scores[it.id] ?: 0.0) >= HERO_THRESHOLD }.mapNotNull { it.id }.toMutableSet()
         // If nothing cleared the bar, still let a decent episode's best photo be a hero.
-        if (heroIds.isEmpty() && episode.size >= 3) {
+        // Req 6: even a 2-photo episode may promote its best to a full-bleed solo.
+        if (heroIds.isEmpty() && episode.size >= 2) {
             val best = episode.maxByOrNull { scores[it.id] ?: 0.0 }
             if (best?.id != null && (scores[best.id] ?: 0.0) >= HERO_PROMOTE_THRESHOLD) heroIds.add(best.id!!)
         }
@@ -244,7 +247,7 @@ class PhotoGrouper {
     private fun reduceOnePage(draft: MutableList<DraftPage>, scores: Map<UUID, Double>, protectedIds: Set<UUID>) {
         if (draft.size < 2) return
 
-        data class Merge(val i: Int, val drops: Int, val heroPenalty: Int, val combinedScore: Double)
+        data class Merge(val i: Int, val drops: Int, val heroPenalty: Int, val resultSize: Int, val combinedScore: Double)
 
         val best = (0 until draft.size - 1).map { i ->
             val a = draft[i]; val b = draft[i + 1]
@@ -252,8 +255,11 @@ class PhotoGrouper {
             val drops = (sum - MAX_PHOTOS_PER_PAGE).coerceAtLeast(0)
             val heroPenalty = (if (a.isHero) 1 else 0) + (if (b.isHero) 1 else 0)
             val combined = a.photos.sumOf { scores[it.id] ?: 0.0 } + b.photos.sumOf { scores[it.id] ?: 0.0 }
-            Merge(i, drops, heroPenalty, combined)
-        }.minWithOrNull(compareBy({ it.drops }, { it.heroPenalty }, { it.combinedScore }))!!
+            Merge(i, drops, heroPenalty, minOf(sum, MAX_PHOTOS_PER_PAGE), combined)
+        }
+        // Prefer merges that drop nothing, keep heroes, and — for req 6 — produce the
+        // lightest resulting page so grids form only when unavoidable; break ties on score.
+        .minWithOrNull(compareBy({ it.drops }, { it.heroPenalty }, { it.resultSize }, { it.combinedScore }))!!
 
         val i = best.i
         val all = draft[i].photos + draft[i + 1].photos

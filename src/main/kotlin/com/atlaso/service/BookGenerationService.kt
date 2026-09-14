@@ -1,5 +1,6 @@
 package com.atlaso.service
 
+import com.atlaso.application.layout.BookPlanExplainer
 import com.atlaso.application.layout.PhotoSelector
 import com.atlaso.domain.book.Book
 import com.atlaso.domain.book.BookStatus
@@ -9,6 +10,7 @@ import com.atlaso.repository.BookRepository
 import com.atlaso.repository.PageRepository
 import com.atlaso.repository.PhotoRepository
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Lazy
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -29,8 +31,12 @@ class BookGenerationService(
     private val photoSelector: PhotoSelector,
     private val layoutEngine: LayoutEngine,
     private val tripService: TripService,
+    private val bookPlanExplainer: BookPlanExplainer,
     // @Lazy breaks the BookGenerationService <-> BookGenerationProcessor construction cycle.
-    @Lazy private val processor: BookGenerationProcessor
+    @Lazy private val processor: BookGenerationProcessor,
+    // Dev switch: log the full spread-by-spread plan after every generation. Enable
+    // locally with ATLASO_DEBUG_LOG_BOOK_PLAN=true (kept off in prod to avoid log spam).
+    @Value("\${atlaso.debug.log-book-plan:false}") private val logBookPlan: Boolean = false
 ) {
     private val logger = LoggerFactory.getLogger(BookGenerationService::class.java)
 
@@ -115,6 +121,11 @@ class BookGenerationService(
         bookRepository.save(book)
         logger.info("Generated book: {} (v{}) with {} pages", book.id, book.version, book.pages.size)
 
+        if (logBookPlan) {
+            val byId = selectionResult.photos.mapNotNull { p -> p.id?.let { it to p } }.toMap()
+            logger.info("Book plan for {}:\n{}", book.id, bookPlanExplainer.explain(pages, byId))
+        }
+
         tripService.updateStatus(tripId, TripStatus.BOOK_GENERATED)
     }
 
@@ -142,6 +153,17 @@ class BookGenerationService(
     fun getBookForUser(bookId: UUID, userId: UUID): Book {
         return bookRepository.findByIdAndTripUserId(bookId, userId)
             .orElseThrow { BookNotFoundException(bookId) }
+    }
+
+    /**
+     * Renders the book's layout as a spread-by-spread text plan (with a rule-compliance
+     * header) for eyeballing the algorithm without the frontend. Dev/debug aid.
+     */
+    @Transactional(readOnly = true)
+    fun getBookPlan(bookId: UUID, userId: UUID): String {
+        val book = getBookForUser(bookId, userId)
+        val photosById = photoRepository.findByTripId(book.trip.id!!).mapNotNull { p -> p.id?.let { it to p } }.toMap()
+        return bookPlanExplainer.explain(book.pages, photosById)
     }
 
     @Transactional(readOnly = true)

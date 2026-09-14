@@ -61,6 +61,16 @@ class BookController(
         return ResponseEntity.ok(BookResponse.from(book))
     }
 
+    /** Dev/debug: spread-by-spread text plan of the book's layout with a rule-compliance header. */
+    @GetMapping("/books/{bookId}/plan", produces = [MediaType.TEXT_PLAIN_VALUE])
+    fun getBookPlan(
+        @PathVariable bookId: UUID,
+        @AuthenticationPrincipal jwt: Jwt
+    ): ResponseEntity<String> {
+        val userId = UUID.fromString(jwt.subject)
+        return ResponseEntity.ok(bookGenerationService.getBookPlan(bookId, userId))
+    }
+
     @PostMapping("/books/{bookId}/regenerate")
     fun regenerateBook(
         @PathVariable bookId: UUID,
