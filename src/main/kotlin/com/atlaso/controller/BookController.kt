@@ -20,7 +20,7 @@ data class CoverConfigRequest(
     val country: String? = null,
     val subtitle: String? = null
 )
-data class ExportBookRequest(val coverImageBase64: String?)
+data class ExportBookRequest(val coverImageBase64: String?, val backImageBase64: String? = null)
 
 @RestController
 @RequestMapping("/api")
@@ -77,7 +77,8 @@ class BookController(
     ): ResponseEntity<BookResponse> {
         val userId = UUID.fromString(jwt.subject)
         val coverPng = body?.coverImageBase64?.let { java.util.Base64.getDecoder().decode(it) }
-        val book = pdfExportService.exportBook(bookId, userId, coverPng)
+        val backPng = body?.backImageBase64?.let { java.util.Base64.getDecoder().decode(it) }
+        val book = pdfExportService.exportBook(bookId, userId, coverPng, backPng)
         return ResponseEntity.ok(BookResponse.from(book))
     }
 

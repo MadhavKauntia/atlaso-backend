@@ -27,7 +27,7 @@ class PdfExportService(
 ) {
     private val logger = LoggerFactory.getLogger(PdfExportService::class.java)
 
-    fun exportBook(bookId: UUID, userId: UUID, coverPng: ByteArray? = null): Book {
+    fun exportBook(bookId: UUID, userId: UUID, coverPng: ByteArray? = null, backPng: ByteArray? = null): Book {
         val book = bookGenerationService.getBookForUser(bookId, userId)
 
         if (book.status != BookStatus.READY_FOR_PREVIEW && book.status != BookStatus.FAILED && book.status != BookStatus.PDF_READY) {
@@ -79,7 +79,7 @@ class PdfExportService(
                 pages = pageRenderDataList
             )
 
-            val coverPdfBytes = buildCoverPdf(book, coverPng)
+            val coverPdfBytes = buildCoverPdf(book, coverPng, backPng)
 
             storageService.store("pdfs/${bookId}/cover.pdf", ByteArrayInputStream(coverPdfBytes), "application/pdf")
             storageService.store("pdfs/${bookId}/photobook.pdf", ByteArrayInputStream(contentPdfBytes), "application/pdf")
@@ -96,35 +96,36 @@ class PdfExportService(
         }
     }
 
-    private fun buildCoverPdf(book: Book, coverPng: ByteArray?): ByteArray {
-        if (coverPng != null) {
-            return wrapPngInPdf(coverPng)
+    /**
+     * Cover PDF: page 1 = front cover, page 2 = hardcover back (same bg colour as the
+     * cover with the atlaso wordmark + URL). Both pages are client-rendered PNGs. When
+     * no client cover is supplied we fall back to the simple single-page text cover.
+     */
+    private fun buildCoverPdf(book: Book, coverPng: ByteArray?, backPng: ByteArray?): ByteArray {
+        if (coverPng == null) {
+            return pdfRenderer.renderCover(book.title, book.subtitle)
         }
-        return pdfRenderer.renderCover(book.title, book.subtitle)
-    }
-
-    /** Wraps a single PNG image into a single-page PDF sized to match the image's natural dimensions. */
-    private fun wrapPngInPdf(pngBytes: ByteArray): ByteArray {
         val document = PDDocument()
         try {
-            val image = PDImageXObject.createFromByteArray(document, pngBytes, "cover")
-            // Cover uses the same trim size as the interior pages (6.9 × 9.8 in);
-            // the full-bleed cover image fills the page.
-            val pageW = PdfRenderer.PAGE_WIDTH
-            val pageH = PdfRenderer.PAGE_HEIGHT
-
-            val page = PDPage(PDRectangle(pageW, pageH))
-            document.addPage(page)
-
-            PDPageContentStream(document, page).use { cs ->
-                cs.drawImage(image, 0f, 0f, pageW, pageH)
-            }
-
+            addPngPage(document, coverPng, "cover")
+            if (backPng != null) addPngPage(document, backPng, "back")
             val out = ByteArrayOutputStream()
             document.save(out)
             return out.toByteArray()
         } finally {
             document.close()
+        }
+    }
+
+    /** Adds a full-bleed PNG page (trim size = the interior page size) to the document. */
+    private fun addPngPage(document: PDDocument, pngBytes: ByteArray, name: String) {
+        val image = PDImageXObject.createFromByteArray(document, pngBytes, name)
+        val pageW = PdfRenderer.PAGE_WIDTH
+        val pageH = PdfRenderer.PAGE_HEIGHT
+        val page = PDPage(PDRectangle(pageW, pageH))
+        document.addPage(page)
+        PDPageContentStream(document, page).use { cs ->
+            cs.drawImage(image, 0f, 0f, pageW, pageH)
         }
     }
 
