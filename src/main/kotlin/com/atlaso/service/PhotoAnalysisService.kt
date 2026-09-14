@@ -132,7 +132,8 @@ class PhotoAnalysisService(
             subjectProminence = response.subjectProminence,
             settingScope = response.settingScope,
             backgroundComplexity = response.backgroundComplexity,
-            negativeSpace = response.negativeSpace
+            negativeSpace = response.negativeSpace,
+            schemaVersion = PhotoSignals.CURRENT_SCHEMA_VERSION
         )
     }
 }
