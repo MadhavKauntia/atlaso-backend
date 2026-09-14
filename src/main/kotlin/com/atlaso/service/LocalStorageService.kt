@@ -49,6 +49,8 @@ class LocalStorageService(
         logger.info("Deleted file at: {}", filePath)
     }
 
+    override fun exists(key: String): Boolean = Files.exists(resolveFilePath(key))
+
     /**
      * Resolves [key] under the storage base directory, guarding against path traversal:
      * the normalized absolute path must stay inside the base. A key like `../../etc/passwd`

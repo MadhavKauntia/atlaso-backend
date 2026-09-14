@@ -75,7 +75,10 @@ atlaso:
     jwt-secret: "${JWT_SECRET}"
     google-client-id: "${GOOGLE_CLIENT_ID}"
   storage:
-    type: "${STORAGE_TYPE:local}"
+    # Safe default: S3. Local storage (and its public dev endpoints) only activates when a
+    # developer explicitly sets STORAGE_TYPE=local — a prod that forgets the var stays on S3
+    # instead of silently exposing the local file endpoints.
+    type: "${STORAGE_TYPE:s3}"
     local:
       base-path: ./uploads
     s3:

@@ -75,14 +75,7 @@ class TripController(
         return ResponseEntity.ok(TripResponse.from(trip))
     }
 
-    @PostMapping("/{id}/order")
-    fun markOrdered(
-        @PathVariable id: UUID,
-        @AuthenticationPrincipal jwt: Jwt
-    ): ResponseEntity<TripResponse> {
-        val userId = UUID.fromString(jwt.subject)
-        tripService.getTrip(id, userId) // validates ownership
-        val trip = tripService.updateStatus(id, TripStatus.ORDERED)
-        return ResponseEntity.ok(TripResponse.from(trip))
-    }
+    // NOTE: the old POST /{id}/order endpoint was removed — a trip may only be marked ORDERED
+    // by the verified-payment transaction (PaymentController.verify → OrderService), never on
+    // an unauthenticated client's say-so.
 }

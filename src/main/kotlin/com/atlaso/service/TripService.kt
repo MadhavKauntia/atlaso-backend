@@ -54,13 +54,16 @@ class TripService(
     }
 
     /**
-     * Enforces guest capability for operations on a trip by UUID: if the trip has a guest
-     * token, the caller must present the matching one. Legacy trips (null hash) are allowed
-     * so pre-existing links keep working.
+     * Enforces guest capability for operations on a trip by UUID. A claimed trip must be
+     * operated with the owner's JWT (authenticated endpoints), not the guest token. An
+     * unclaimed trip requires its matching guest token — no grandfathering, so a bare UUID
+     * (or a tokenless legacy trip) can never be used. (Clear tokenless legacy trips before
+     * launch; see the PR notes.)
      */
     fun assertGuestAccess(tripId: UUID, guestToken: String?) {
         val trip = tripRepository.findById(tripId).orElseThrow { TripNotFoundException(tripId) }
-        val hash = trip.guestTokenHash ?: return
+        if (trip.user != null) throw GuestTokenException("This trip has been claimed — sign in to continue")
+        val hash = trip.guestTokenHash ?: throw GuestTokenException("Guest access is not available for this trip")
         if (!tokenMatches(guestToken, hash)) throw GuestTokenException("Invalid or missing guest token")
     }
 
@@ -84,11 +87,14 @@ class TripService(
             if (existingUser.id != userId) throw RuntimeException("Trip already belongs to another user")
             return trip // already claimed by this user
         }
-        trip.guestTokenHash?.let { hash ->
-            if (!tokenMatches(guestToken, hash)) throw GuestTokenException("Invalid or missing guest token")
-        }
+        // Require the matching guest token to claim — a UUID alone can't hijack a trip.
+        val hash = trip.guestTokenHash ?: throw GuestTokenException("Guest token required to claim this trip")
+        if (!tokenMatches(guestToken, hash)) throw GuestTokenException("Invalid or missing guest token")
+
         val user = userRepository.findById(userId).orElseThrow { RuntimeException("User not found") }
         trip.user = user
+        // Revoke the guest token on claim — subsequent access must use the owner's JWT.
+        trip.guestTokenHash = null
         val saved = tripRepository.save(trip)
         logger.info("Claimed trip: {} for user: {}", tripId, userId)
         return saved

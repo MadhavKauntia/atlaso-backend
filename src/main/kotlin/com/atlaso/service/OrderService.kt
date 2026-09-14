@@ -55,12 +55,14 @@ class OrderService(
         val payment = paymentService.fetchPayment(razorpayPaymentId)
             ?: throw PaymentVerificationException("Could not verify payment with Razorpay")
         if (payment.status != "captured") throw PaymentVerificationException("Payment is not captured")
-        if (payment.orderId != null && payment.orderId != checkout.razorpayOrderId)
+        // Require exact, non-null matches from the provider — never accept missing fields.
+        if (payment.orderId == null || payment.orderId != checkout.razorpayOrderId)
             throw PaymentVerificationException("Payment does not belong to this order")
-        val captured = payment.amountMinor ?: 0L
+        val captured = payment.amountMinor
+            ?: throw PaymentVerificationException("Captured amount missing")
         if (captured < checkout.amountMinor)
             throw PaymentVerificationException("Captured amount is below the order amount")
-        if (payment.currency != null && !payment.currency.equals(checkout.currency, ignoreCase = true))
+        if (payment.currency == null || !payment.currency.equals(checkout.currency, ignoreCase = true))
             throw PaymentVerificationException("Currency mismatch")
 
         val tripId = checkout.tripId

@@ -16,9 +16,16 @@ class RateLimiter {
 
     private val buckets = ConcurrentHashMap<String, Window>()
 
+    private companion object {
+        // Bound the map so rotating keys (e.g. spoofed IPs) can't grow it without limit.
+        const val MAX_BUCKETS = 50_000
+        const val STALE_MS = 3_600_000L // any window older than the longest one we use is dead
+    }
+
     /** Returns true if this call is within [limit] for the current [windowSeconds] window on [key]. */
     fun tryAcquire(key: String, limit: Int, windowSeconds: Long): Boolean {
         val now = System.currentTimeMillis()
+        if (buckets.size >= MAX_BUCKETS) buckets.values.removeIf { now - it.startMs >= STALE_MS }
         var allowed = false
         buckets.compute(key) { _, existing ->
             val w = if (existing == null || now - existing.startMs >= windowSeconds * 1000) Window(now, 0) else existing

@@ -186,6 +186,9 @@ class PhotoUploadService(
             }
             require(conf.contentType in ALLOWED_CONTENT_TYPES) { "Unsupported file type: ${conf.contentType}" }
             require(conf.fileSize in 1..MAX_FILE_SIZE_BYTES) { "Invalid file size" }
+            // The object must actually exist (client can't register a key that was never uploaded).
+            require(storageService.exists(conf.storageKey)) { "Uploaded object not found for ${conf.storageKey}" }
+            conf.thumbnailStorageKey?.let { require(storageService.exists(it)) { "Thumbnail object not found" } }
 
             val takenAt = conf.takenAt?.let { Instant.ofEpochMilli(it) }
             Photo(

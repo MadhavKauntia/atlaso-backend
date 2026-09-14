@@ -65,7 +65,7 @@ class SecurityConfig(
             .split(",").map { it.trim() }
         config.allowedOrigins = origins
         config.allowedMethods = listOf("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
-        config.allowedHeaders = listOf("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "X-Admin-Key")
+        config.allowedHeaders = listOf("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "X-Admin-Key", "X-Guest-Token")
         config.allowCredentials = false
         val source = UrlBasedCorsConfigurationSource()
         source.registerCorsConfiguration("/api/**", config)

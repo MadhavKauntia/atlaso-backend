@@ -10,6 +10,8 @@ import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest
 import software.amazon.awssdk.services.s3.model.GetObjectRequest
+import software.amazon.awssdk.services.s3.model.HeadObjectRequest
+import software.amazon.awssdk.services.s3.model.NoSuchKeyException
 import software.amazon.awssdk.services.s3.model.PutObjectRequest
 import software.amazon.awssdk.services.s3.presigner.S3Presigner
 import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest
@@ -59,6 +61,13 @@ class S3StorageService(
                 .key(key)
                 .build()
         ).asByteArray()
+    }
+
+    override fun exists(key: String): Boolean = try {
+        s3.headObject(HeadObjectRequest.builder().bucket(config.bucketName).key(key).build())
+        true
+    } catch (e: NoSuchKeyException) {
+        false
     }
 
     override fun getAccessUrl(key: String, contentType: String): String {
