@@ -42,8 +42,27 @@ Analyze the image and return ONLY this exact JSON structure:
   "negative_space": <one of: "low", "medium", "high">
 }
 
-Guidance: aesthetic_score 0=poor, 1=stunning. blur_score 0=sharp, 1=blurry. dominant_colors: 2-4 hex, most dominant first. detected_objects: 3-6 key labels. For every enum field, pick the single best option from its list. Describe only observable properties.
-Return ONLY the JSON. No markdown, no explanations, no code blocks."""
+Rules:
+- aesthetic_score: 0.0 = low quality, 1.0 = professional/stunning
+- blur_score: 0.0 = sharp, 1.0 = very blurry
+- faces_count: number of human faces visible
+- scene_type: primary subject of the photo
+- time_of_day: lighting conditions
+- dominant_colors: 2-4 most prominent colors as hex codes
+- detected_objects: 3-6 key objects or subjects visible in the photo
+- color_temperature: overall warmth of the photo's color palette
+- mood: emotional tone of the image
+- depth_of_field: shallow = blurred background with isolated subject; deep = everything in focus
+- location_tag: the type of place or setting depicted; choose the single best match
+- subject_type: the main subject category of the photo
+- shot_distance: closeup = tight framing on the subject; medium = subject with some surroundings; wide = expansive framing / distant subject
+- subject_prominence: how dominant the main subject is in the frame (high = fills the frame; low = small within the scene)
+- setting_scope: detail = a small detail/close object; subject = a subject in context; environment = the whole place/scene
+- background_complexity: how busy or cluttered the background is
+- negative_space: amount of clean, empty space around the subject
+
+Describe only observable properties. Do not judge story importance or recommend layouts.
+Return ONLY the JSON. No markdown. No explanations. No code blocks."""
     }
 
     override fun analyze(imageUrl: String): String {
