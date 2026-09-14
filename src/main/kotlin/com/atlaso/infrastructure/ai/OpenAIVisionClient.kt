@@ -54,28 +54,14 @@ Rules:
 - mood: emotional tone of the image
 - depth_of_field: shallow = blurred background with isolated subject; deep = everything in focus
 - location_tag: the type of place or setting depicted; choose the single best match
-- subject_type: what the photo is primarily OF. Decide in this order:
-    * mostly people → "person" (1 person), "couple" (2 people together), "group" (3+ people)
-    * someone actively doing an activity (surfing, hiking, riding, swimming, dancing) → "activity"
-    * natural scenery/vista dominates (beach, mountains, sea, sky, fields) → "landscape"
-    * a building, monument, temple, bridge or interior architecture is the subject → "architecture"
-    * food or drink (a plate, meal, cocktail, coffee) → "food"
-    * a specific single thing/product/detail → "object"
-    * use "other" ONLY when none of the above genuinely fit
-- shot_distance: how tightly the main subject is framed:
-    * "closeup" = subject fills most of the frame (a face, a plate of food, a detail)
-    * "medium" = subject is clearly the focus but shares the frame with some surroundings (waist-up person, a table in context)
-    * "wide" = subject is small in the frame OR an expansive scene (full landscapes/vistas are almost always "wide")
-- subject_prominence: how dominant the main subject is — "high" = dominates/fills the frame; "medium" = clearly present but shares the frame; "low" = small within a larger scene (a person tiny against scenery)
-- setting_scope: "detail" = a single close object/detail; "subject" = a subject shown within its context; "environment" = the whole place/scene dominates (a vista, a room, a street)
-- background_complexity: "low" = clean/plain/simple; "medium" = a few elements; "high" = busy/cluttered
-- negative_space: amount of clean empty space (sky, wall, water) around the subject — "low" = frame mostly filled; "medium" = some empty space; "high" = large clean empty areas
+- subject_type: the main subject category of the photo
+- shot_distance: closeup = tight framing on the subject; medium = subject with some surroundings; wide = expansive framing / distant subject
+- subject_prominence: how dominant the main subject is in the frame (high = fills the frame; low = small within the scene)
+- setting_scope: detail = a small detail/close object; subject = a subject in context; environment = the whole place/scene
+- background_complexity: how busy or cluttered the background is
+- negative_space: amount of clean, empty space around the subject
 
-IMPORTANT: commit to the single most likely value for EVERY field from direct observation.
-"medium", "subject", and "other" are real categories, not safe defaults — do not fall back
-to them out of caution. A wide vista is "wide"/"environment"/"landscape"; a tight portrait
-is "closeup"/"subject"/"person". Describe only observable properties. Do not judge story
-importance or recommend layouts.
+Describe only observable properties. Do not judge story importance or recommend layouts.
 Return ONLY the JSON. No markdown. No explanations. No code blocks."""
     }
 

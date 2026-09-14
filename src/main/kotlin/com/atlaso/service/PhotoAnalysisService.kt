@@ -37,9 +37,7 @@ class PhotoAnalysisService(
     }
 
     fun analyzeUnanalyzedPhotos(tripId: UUID): List<Photo> {
-        // Re-analyze photos that were never analyzed OR whose signals predate the current
-        // analysis schema (§19). Valid, current analyses are reused (no vision call).
-        val unanalyzed = photoRepository.findByTripId(tripId).filter { needsAnalysis(it) }
+        val unanalyzed = photoRepository.findByTripIdAndSignalsIsNull(tripId)
 
         // Skip vision calls for redundant burst frames: cluster tight bursts and
         // analyze only the sharpest representatives. Everything else is analyzed.
@@ -53,12 +51,6 @@ class PhotoAnalysisService(
             executor.submit<Photo> { analyzePhoto(photo) }
         }
         return futures.map { it.get() }
-    }
-
-    /** A photo needs a (re)analysis when it has no signals or its signals are a stale schema. */
-    private fun needsAnalysis(photo: Photo): Boolean {
-        val s = photo.signals ?: return true
-        return s.schemaVersion < PhotoSignals.CURRENT_SCHEMA_VERSION
     }
 
     /**
@@ -132,8 +124,7 @@ class PhotoAnalysisService(
             subjectProminence = response.subjectProminence,
             settingScope = response.settingScope,
             backgroundComplexity = response.backgroundComplexity,
-            negativeSpace = response.negativeSpace,
-            schemaVersion = PhotoSignals.CURRENT_SCHEMA_VERSION
+            negativeSpace = response.negativeSpace
         )
     }
 }

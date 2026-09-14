@@ -39,28 +39,14 @@ Rules:
 - mood: emotional tone of the image
 - depth_of_field: shallow = blurred background with isolated subject; deep = everything in focus
 - location_tag: the type of place or setting depicted; choose the single best match
-- subject_type: what the photo is primarily OF. Decide in this order:
-    * mostly people → "person" (1), "couple" (2 together), "group" (3+)
-    * someone actively doing an activity (surfing, hiking, riding, swimming, dancing) → "activity"
-    * natural scenery/vista dominates (beach, mountains, sea, sky, fields) → "landscape"
-    * a building, monument, temple, bridge or interior architecture is the subject → "architecture"
-    * food or drink (plate, meal, cocktail, coffee) → "food"
-    * a specific single thing/product/detail → "object"
-    * use "other" ONLY when none genuinely fit
-- shot_distance: how tightly the main subject is framed:
-    * "closeup" = subject fills most of the frame (a face, a plate, a detail)
-    * "medium" = subject is the focus but shares the frame with some surroundings (waist-up person, table in context)
-    * "wide" = subject is small OR an expansive scene (full landscapes/vistas are almost always "wide")
-- subject_prominence: "high" = dominates/fills the frame; "medium" = clearly present but shares the frame; "low" = small within a larger scene
-- setting_scope: "detail" = a single close object/detail; "subject" = a subject within its context; "environment" = the whole place/scene dominates
-- background_complexity: "low" = clean/plain; "medium" = a few elements; "high" = busy/cluttered
-- negative_space: "low" = frame mostly filled; "medium" = some empty space; "high" = large clean empty areas (sky, wall, water)
+- subject_type: the main subject category of the photo
+- shot_distance: closeup = tight on subject; medium = subject with surroundings; wide = expansive / distant
+- subject_prominence: how dominant the main subject is in the frame
+- setting_scope: detail = small detail; subject = subject in context; environment = the whole place/scene
+- background_complexity: how busy/cluttered the background is
+- negative_space: amount of clean empty space around the subject
 
-IMPORTANT: commit to the single most likely value for EVERY field from direct observation.
-"medium", "subject", and "other" are real categories, not safe defaults — do not fall back
-to them out of caution. A wide vista is "wide"/"environment"/"landscape"; a tight portrait
-is "closeup"/"subject"/"person". Describe only observable properties. Do not judge story
-importance or recommend layouts.
+Describe only observable properties. Do not judge story importance or recommend layouts.
 Return ONLY the JSON. No markdown. No explanations. No code blocks.
 ```
 

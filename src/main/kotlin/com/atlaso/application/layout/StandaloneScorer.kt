@@ -24,26 +24,10 @@ object StandaloneScorer {
 
     const val STRONG_THRESHOLD = 0.75
 
-    /**
-     * baseStandaloneScore (§2): quality-only, no uniqueness. Used by selection before
-     * photos are grouped into episodes. Weights per spec §2.
-     */
-    fun baseScore(photo: Photo): Double {
-        val s = photo.signals ?: return 0.0
-        return s.aestheticScore * 0.55 +
-            (1.0 - s.blurScore) * 0.15 +
-            prominenceScore(s.subjectProminence) * 0.15 +
-            backgroundCleanliness(s.backgroundComplexity) * 0.15
-    }
-
     /** standalone_score for every photo in an episode (uniqueness is episode-relative). */
     fun scoreEpisode(episode: List<Photo>): Map<UUID, Double> =
         episode.filter { it.id != null }.associate { it.id!! to score(it, episode) }
 
-    /**
-     * Full standalone_score: baseStandaloneScore blended with episode-relative
-     * uniqueness. Drives hero reservation and slot sizing (not selection).
-     */
     fun score(photo: Photo, episode: List<Photo>): Double {
         val s = photo.signals ?: return 0.0
         return s.aestheticScore * 0.50 +
@@ -72,7 +56,26 @@ object StandaloneScorer {
     private fun uniqueness(photo: Photo, episode: List<Photo>): Double {
         val others = episode.filter { it.id != photo.id }
         if (others.isEmpty()) return 1.0
-        val avgSimilarity = others.map { PhotoSimilarity.similarity(photo, it) }.average()
+        val avgSimilarity = others.map { similarity(photo, it) }.average()
         return (1.0 - avgSimilarity).coerceIn(0.0, 1.0)
+    }
+
+    private fun similarity(a: Photo, b: Photo): Double {
+        val sa = a.signals ?: return 0.0
+        val sb = b.signals ?: return 0.0
+        var sim = 0.0
+        if (sa.subjectType == sb.subjectType) sim += 0.35
+        if (sa.shotDistance == sb.shotDistance) sim += 0.25
+        if (sa.settingScope == sb.settingScope) sim += 0.15
+        sim += objectJaccard(sa.detectedObjects, sb.detectedObjects) * 0.25
+        return sim.coerceIn(0.0, 1.0)
+    }
+
+    private fun objectJaccard(a: List<String>, b: List<String>): Double {
+        if (a.isEmpty() || b.isEmpty()) return 0.0
+        val sa = a.toSet()
+        val sb = b.toSet()
+        val union = sa.union(sb).size.toDouble()
+        return if (union == 0.0) 0.0 else sa.intersect(sb).size / union
     }
 }
