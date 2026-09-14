@@ -9,6 +9,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
+import java.math.BigDecimal
 import java.util.Base64
 import java.text.NumberFormat
 import java.util.Locale
@@ -28,7 +29,6 @@ class EmailService(
 ) {
     private val logger = LoggerFactory.getLogger(EmailService::class.java)
     private val http = OkHttpClient()
-    private val inr = NumberFormat.getNumberInstance(Locale("en", "IN"))
 
     /** Emails the order confirmation to the customer, attaching the receipt PDF when provided. */
     fun sendOrderConfirmation(order: Order, receiptPdf: ByteArray?) {
@@ -79,8 +79,26 @@ class EmailService(
         }
     }
 
+    /** Formats paise as ₹ with 2 decimals only when the amount isn't whole rupees. */
+    private fun money(minor: Long): String {
+        val fmt = NumberFormat.getNumberInstance(Locale("en", "IN"))
+        if (minor % 100L == 0L) {
+            fmt.maximumFractionDigits = 0
+        } else {
+            fmt.minimumFractionDigits = 2
+            fmt.maximumFractionDigits = 2
+        }
+        return "₹" + fmt.format(BigDecimal(minor).movePointLeft(2))
+    }
+
     private fun buildHtml(order: Order): String {
-        val total = "₹${inr.format(order.amountMinor / 100)}"
+        val discount = order.discountMinor ?: 0L
+        val subtotalMinor = order.amountMinor + discount
+        val total = money(order.amountMinor)
+        val discountRow = if (discount > 0L) {
+            val label = order.couponCode?.let { "Coupon ($it)" } ?: "Discount"
+            """<tr><td style="padding:6px 0;color:#1e8a5f;">$label</td><td style="padding:6px 0;text-align:right;color:#1e8a5f;">-${money(discount)}</td></tr>"""
+        } else ""
         val title = order.bookTitle?.let { "$it Travel Photobook" } ?: "Travel Photobook"
         val name = order.customerName?.substringBefore(" ") ?: "there"
 
@@ -116,7 +134,9 @@ class EmailService(
                   <tr><td style="padding:6px 0;color:#8a7f6f;">Order number</td><td style="padding:6px 0;text-align:right;font-weight:700;">ATL-${order.number}</td></tr>
                   <tr><td style="padding:6px 0;color:#8a7f6f;">Book</td><td style="padding:6px 0;text-align:right;">$title</td></tr>
                   <tr><td style="padding:6px 0;color:#8a7f6f;">Quantity</td><td style="padding:6px 0;text-align:right;">${order.quantity}</td></tr>
-                  <tr><td style="padding:10px 0 0;border-top:1px solid #ece5d8;font-weight:800;">Total paid</td><td style="padding:10px 0 0;border-top:1px solid #ece5d8;text-align:right;font-weight:800;">$total</td></tr>
+                  <tr><td style="padding:10px 0 6px;border-top:1px solid #ece5d8;color:#8a7f6f;">Subtotal</td><td style="padding:10px 0 6px;border-top:1px solid #ece5d8;text-align:right;">${money(subtotalMinor)}</td></tr>
+                  $discountRow
+                  <tr><td style="padding:6px 0 0;font-weight:800;">Total paid</td><td style="padding:6px 0 0;text-align:right;font-weight:800;">$total</td></tr>
                 </table>
 
                 $shippingBlock

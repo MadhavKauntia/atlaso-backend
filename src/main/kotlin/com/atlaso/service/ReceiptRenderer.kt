@@ -9,6 +9,7 @@ import org.apache.pdfbox.pdmodel.font.PDFont
 import org.apache.pdfbox.pdmodel.font.PDType0Font
 import org.springframework.stereotype.Component
 import java.io.ByteArrayOutputStream
+import java.math.BigDecimal
 import java.text.NumberFormat
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -22,7 +23,6 @@ import java.util.Locale
 @Component
 class ReceiptRenderer {
 
-    private val inr = NumberFormat.getNumberInstance(Locale("en", "IN"))
     private val dateFmt = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.ENGLISH)
     private val ist = ZoneId.of("Asia/Kolkata")
 
@@ -93,15 +93,22 @@ class ReceiptRenderer {
                 gap(16f)
                 text(order.bookTitle?.let { "$it Travel Photobook" } ?: "Travel Photobook", regular, 11f)
                 gap(18f)
-                val total = order.amountMinor / 100
-                val totalStr = "₹${inr.format(total)}"
-                row("${order.quantity} × Hardcover Photobook", totalStr, regular, 11f)
+                // The captured amount is the discounted total; the subtotal is that
+                // plus whatever the coupon took off, so the two always reconcile.
+                val discount = order.discountMinor ?: 0L
+                val subtotalMinor = order.amountMinor + discount
+                row("${order.quantity} × Hardcover Photobook", money(subtotalMinor), regular, 11f)
                 gap(16f)
-                row("Shipping", "₹0", regular, 11f)
+                if (discount > 0L) {
+                    val couponLabel = order.couponCode?.let { "Coupon ($it)" } ?: "Discount"
+                    row(couponLabel, "-${money(discount)}", regular, 11f)
+                    gap(16f)
+                }
+                row("Shipping", money(0), regular, 11f)
                 gap(12f)
                 divider()
                 gap(20f)
-                row("TOTAL", totalStr, bold, 13f)
+                row("TOTAL", money(order.amountMinor), bold, 13f)
                 gap(32f)
 
                 text("Payment status:  ${order.status}", regular, 11f)
@@ -124,6 +131,18 @@ class ReceiptRenderer {
         } finally {
             doc.close()
         }
+    }
+
+    /** Formats paise as ₹ with 2 decimals only when the amount isn't whole rupees. */
+    private fun money(minor: Long): String {
+        val fmt = NumberFormat.getNumberInstance(Locale("en", "IN"))
+        if (minor % 100L == 0L) {
+            fmt.maximumFractionDigits = 0
+        } else {
+            fmt.minimumFractionDigits = 2
+            fmt.maximumFractionDigits = 2
+        }
+        return "₹" + fmt.format(BigDecimal(minor).movePointLeft(2))
     }
 
     private fun methodLabel(method: String?): String = when (method?.lowercase()) {
