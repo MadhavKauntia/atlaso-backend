@@ -17,14 +17,14 @@ class PhotoGrouperTest {
     private val base: Instant = Instant.parse("2025-06-01T08:00:00Z")
 
     @Test
-    fun `every page holds only 1, 2, or 4 photos`() {
+    fun `every page holds between 1 and 4 photos`() {
         val photos = manyDistinctPhotos(count = 130)
 
         val groups = grouper.group(photos)
 
         assertTrue(groups.isNotEmpty())
         groups.forEach { g ->
-            assertTrue(g.photos.size in setOf(1, 2, 4)) { "Illegal page size ${g.photos.size}" }
+            assertTrue(g.photos.size in 1..4) { "Illegal page size ${g.photos.size}" }
         }
     }
 

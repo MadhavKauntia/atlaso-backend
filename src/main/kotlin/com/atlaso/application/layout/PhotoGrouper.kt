@@ -24,10 +24,9 @@ class PhotoGrouper {
     companion object {
         const val TARGET_PAGE_COUNT = 50
 
-        // A page holds only 1, 2, or 4 photos — never 3. Every chunk / merge / split
-        // below is required to preserve this invariant.
-        private val LEGAL_PAGE_SIZES = setOf(1, 2, 4)
+        // A page holds 1 to 4 photos. Every chunk / merge / split below preserves this.
         private const val MAX_PHOTOS_PER_PAGE = 4
+        private val LEGAL_PAGE_SIZES = (1..MAX_PHOTOS_PER_PAGE).toSet()
 
         // A gap between two photos starts a new episode when its boundary score clears
         // this. ~0.55 needs a real time gap plus a location or scene change, so photos
@@ -68,8 +67,8 @@ class PhotoGrouper {
      *    cap near-duplicates at 2, and — only if that leaves too few photos — relax
      *    dedup to fill the book instead of padding with weak images.
      * 3. Per episode: reserve strong standalone photos as solo pages, chunk the rest
-     *    into pages of 1/2/4 photos.
-     * 4. Normalize to exactly [targetPages], always preserving the 1/2/4 invariant and
+     *    into pages of up to 4 photos.
+     * 4. Normalize to exactly [targetPages], always keeping pages within 1–4 photos and
      *    never dropping a coverage-protected photo.
      */
     fun group(photos: List<Photo>, targetPages: Int = TARGET_PAGE_COUNT): List<PhotoGroup> {
@@ -91,7 +90,7 @@ class PhotoGrouper {
         // relax dedup to fill the book if needed.
         val curation = curate(episodes, standaloneById, targetPages)
 
-        // Draft pages, episode by episode, in chronological order (each page 1/2/4).
+        // Draft pages, episode by episode, in chronological order (each page 1–4 photos).
         val draft = mutableListOf<DraftPage>()
         curation.episodes.forEach { ep -> if (ep.isNotEmpty()) draft.addAll(buildEpisodePages(ep, standaloneById)) }
 
@@ -208,7 +207,7 @@ class PhotoGrouper {
 
     /**
      * Reserves strong standalone photos as solo pages (inline, preserving chronology)
-     * and chunks the remaining photos into pages of 1/2/4.
+     * and chunks the remaining photos into pages of up to [MAX_PHOTOS_PER_PAGE].
      */
     private fun buildEpisodePages(episode: List<Photo>, scores: Map<UUID, Double>): List<DraftPage> {
         val heroIds = episode.filter { (scores[it.id] ?: 0.0) >= HERO_THRESHOLD }.mapNotNull { it.id }.toMutableSet()
@@ -222,7 +221,7 @@ class PhotoGrouper {
         var buffer = mutableListOf<Photo>()
         fun flush() {
             if (buffer.isEmpty()) return
-            chunkLegal(buffer).forEach { pages.add(DraftPage(it.toMutableList(), isHero = false)) }
+            buffer.chunked(MAX_PHOTOS_PER_PAGE).forEach { pages.add(DraftPage(it.toMutableList(), isHero = false)) }
             buffer = mutableListOf()
         }
         for (photo in episode) {
@@ -238,30 +237,9 @@ class PhotoGrouper {
     }
 
     /**
-     * Splits a chronological run of photos into pages of legal size (4/2/1), minimizing
-     * lonely singles: a remainder of 3 becomes a 2-page + a single rather than a 3-page.
-     */
-    private fun chunkLegal(photos: List<Photo>): List<List<Photo>> {
-        val out = mutableListOf<List<Photo>>()
-        var idx = 0
-        var rem = photos.size
-        while (rem > 0) {
-            val take = when {
-                rem >= 4 -> 4          // 5→4+.., 6→4+.., 7→4+(3→2+1)
-                rem == 3 -> 2          // 3 → 2 then 1
-                else -> rem            // 1 or 2
-            }
-            out.add(photos.subList(idx, idx + take))
-            idx += take
-            rem -= take
-        }
-        return out
-    }
-
-    /**
      * Removes one page to hit the target count. Merges the two adjacent pages whose
      * combination loses the fewest photos (prefer non-heroes, then the weakest region),
-     * always producing a legal 1/2/4 page and never dropping a coverage-protected photo.
+     * keeping up to [MAX_PHOTOS_PER_PAGE] and never dropping a coverage-protected photo.
      */
     private fun reduceOnePage(draft: MutableList<DraftPage>, scores: Map<UUID, Double>, protectedIds: Set<UUID>) {
         if (draft.size < 2) return
@@ -271,8 +249,7 @@ class PhotoGrouper {
         val best = (0 until draft.size - 1).map { i ->
             val a = draft[i]; val b = draft[i + 1]
             val sum = a.size + b.size
-            val legal = if (sum >= 4) 4 else 2 // sum is ≥2; 3 collapses to 2
-            val drops = (sum - legal).coerceAtLeast(0)
+            val drops = (sum - MAX_PHOTOS_PER_PAGE).coerceAtLeast(0)
             val heroPenalty = (if (a.isHero) 1 else 0) + (if (b.isHero) 1 else 0)
             val combined = a.photos.sumOf { scores[it.id] ?: 0.0 } + b.photos.sumOf { scores[it.id] ?: 0.0 }
             Merge(i, drops, heroPenalty, combined)
@@ -281,8 +258,8 @@ class PhotoGrouper {
         val i = best.i
         val all = draft[i].photos + draft[i + 1].photos
         val (protectedPhotos, others) = all.partition { it.id in protectedIds }
-        val baseSize = if (all.size >= 4) 4 else 2
-        val keepCount = legalCeil(maxOf(baseSize, protectedPhotos.size))
+        // Keep as many as fit (up to the max), coverage-protected photos first.
+        val keepCount = minOf(all.size, MAX_PHOTOS_PER_PAGE)
         val kept = (protectedPhotos + others.sortedByDescending { scores[it.id] ?: 0.0 })
             .take(keepCount)
             .toMutableList()
@@ -291,17 +268,10 @@ class PhotoGrouper {
         draft.removeAt(i + 1)
     }
 
-    /** Rounds a photo count up to the nearest legal page size (1, 2, or 4). */
-    private fun legalCeil(n: Int): Int = when {
-        n <= 1 -> 1
-        n == 2 -> 2
-        else -> 4
-    }
-
     /**
      * Adds one page to hit the target count by splitting the densest page in half
-     * (4 → 2+2, 2 → 1+1). Returns false when no page can be split (all singles), so the
-     * caller stops instead of looping forever.
+     * (4 → 2+2, 3 → 1+2, 2 → 1+1). Returns false when no page can be split (all singles),
+     * so the caller stops instead of looping forever.
      */
     private fun expandOnePage(draft: MutableList<DraftPage>, scores: Map<UUID, Double>): Boolean {
         val idx = draft.indices.filter { draft[it].size >= 2 }.maxByOrNull { draft[it].size } ?: return false
