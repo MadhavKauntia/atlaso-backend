@@ -241,6 +241,40 @@ class PhotoSelectorTest {
         println("Variety bonuses: 0=$bonus0, 2=$bonus2, 5=$bonus5, 10=$bonus10, 20=$bonus20")
     }
 
+    @Test
+    fun `large distinct trip selects enough photos and produces grid pages`() {
+        // 8 episodes on different days, ~15 distinct photos each (varied objects/subjects),
+        // spaced minutes apart so nothing is a burst or a near-duplicate.
+        val subjects = listOf("person", "group", "landscape", "food", "object", "architecture", "activity", "couple")
+        val base = Instant.parse("2026-01-01T08:00:00Z")
+        val photos = mutableListOf<Photo>()
+        for (ep in 0 until 8) {
+            val episodeStart = base.plusSeconds(ep.toLong() * 86_400) // one episode per day
+            for (i in 0 until 15) {
+                photos.add(
+                    createPhoto(
+                        aestheticScore = 0.7,
+                        blurScore = 0.2,
+                        sceneType = listOf("landscape", "people", "food", "city", "misc")[ep % 5],
+                        takenAt = episodeStart.plusSeconds(i.toLong() * 180), // 3 min apart
+                        subjectType = subjects[ep],
+                        detectedObjects = listOf("scene_$ep", "item_${ep}_$i") // low overlap → distinct
+                    )
+                )
+            }
+        }
+
+        val result = selector.selectPhotosForBook(photos)
+
+        // Must keep well more than one-per-page so the grouper can build grids.
+        assertTrue(result.photos.size > 50, "expected >50 selected, got ${result.photos.size}")
+
+        val pages = PhotoGrouper().group(result.photos)
+        assertEquals(50, pages.size)
+        assertTrue(pages.all { it.photos.size in setOf(1, 2, 4) }, "pages must be 1/2/4 photos only")
+        assertTrue(pages.any { it.photos.size >= 2 }, "book must contain multi-photo (grid) pages, not all singles")
+    }
+
     // Helper functions
 
     private fun createPhoto(
@@ -250,7 +284,9 @@ class PhotoSelectorTest {
         timeOfDay: String = "day",
         width: Int = 4000,
         height: Int = 3000,
-        takenAt: Instant? = Instant.now()
+        takenAt: Instant? = Instant.now(),
+        subjectType: String = "other",
+        detectedObjects: List<String> = emptyList()
     ): Photo {
         return Photo(
             id = UUID.randomUUID(),
@@ -271,9 +307,10 @@ class PhotoSelectorTest {
                 blurScore = blurScore,
                 timeOfDay = timeOfDay,
                 facesCount = 0,
-                detectedObjects = emptyList(),
+                detectedObjects = detectedObjects,
                 isBlurry = blurScore > 0.5,
-                dominantColors = emptyList()
+                dominantColors = emptyList(),
+                subjectType = subjectType
             )
         )
     }

@@ -38,13 +38,19 @@ class PhotoSelector(
     private companion object {
         // Upper bound on selected photos: 50 pages × 4 photos/page.
         const val MAX_PHOTOS = 200
-        // Always select at least enough to fill the target pages when material allows,
-        // so a rich trip still yields a full book (§17).
         const val TARGET_PAGES = PhotoGrouper.TARGET_PAGE_COUNT
+        // Aim for ~2 photos per page so the book is a MIX of hero singles and supporting
+        // 2-/4-photo pages — not one photo per page. Selection fills toward this when the
+        // material exists; below it, everything usable is kept (§16, §17).
+        const val SELECTION_TARGET = TARGET_PAGES * 2
 
-        // Two photos are near-duplicates when composition similarity clears this, or when
-        // they're within a burst window and clearly the same moment (§6).
+        // Two photos are near-duplicates when they are near-identical in composition AND
+        // show the same content (object overlap), or when they're within a burst window and
+        // clearly the same moment (§6). Composition alone is not enough — with weak signals
+        // (many photos tagged the same generic subject/shot/scope) it would over-collapse
+        // unrelated photos.
         const val NEAR_DUP_THRESHOLD = 0.80
+        const val NEAR_DUP_OBJECT_OVERLAP = 0.5
         const val BURST_NEAR_DUP_THRESHOLD = 0.60
 
         // adjustedScore weights (§7). Simple and tunable.
@@ -125,7 +131,7 @@ class PhotoSelector(
 
         // Phase 5: saturation fill (§7, §8).
         val budget = minOf(MAX_PHOTOS, allCandidates.size)
-        val minEnough = minOf(budget, TARGET_PAGES)
+        val minEnough = minOf(budget, SELECTION_TARGET)
         while (selectedPhotos.size < budget) {
             var best: Photo? = null
             var bestScore = Double.NEGATIVE_INFINITY
@@ -199,7 +205,11 @@ class PhotoSelector(
         if (sa?.sceneType != null && sb?.sceneType != null && sa.sceneType != sb.sceneType) return false
 
         val sim = cache.similarity(a, b)
-        if (sim >= NEAR_DUP_THRESHOLD) return true
+        // Near-identical composition AND clearly the same content (shared objects).
+        val objectOverlap = PhotoSimilarity.objectJaccard(
+            sa?.detectedObjects ?: emptyList(), sb?.detectedObjects ?: emptyList()
+        )
+        if (sim >= NEAR_DUP_THRESHOLD && objectOverlap >= NEAR_DUP_OBJECT_OVERLAP) return true
         // Timestamp is a clustering signal: same burst + similar composition = same moment.
         val ta = a.metadata.takenAt
         val tb = b.metadata.takenAt
