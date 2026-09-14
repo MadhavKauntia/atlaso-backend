@@ -100,7 +100,7 @@ class PhotoUploadService(
 
     @Transactional(readOnly = true)
     fun getPhotosForTrip(tripId: UUID, userId: UUID? = null, guestToken: String? = null): List<Photo> {
-        tripService.assertReadAccess(tripId, userId, guestToken)
+        tripService.assertTripAccess(tripId, userId, guestToken)
         return photoRepository.findByTripId(tripId)
     }
 
@@ -113,7 +113,7 @@ class PhotoUploadService(
 
     @Transactional(readOnly = true)
     fun getPhotoByTripAndId(photoId: UUID, tripId: UUID, userId: UUID? = null, guestToken: String? = null): Photo {
-        tripService.assertReadAccess(tripId, userId, guestToken)
+        tripService.assertTripAccess(tripId, userId, guestToken)
         return photoRepository.findByIdAndTripId(photoId, tripId)
             .orElseThrow { PhotoNotFoundException(photoId) }
     }
@@ -129,9 +129,8 @@ class PhotoUploadService(
         return saved
     }
 
-    fun initiateUploads(tripId: UUID, requests: List<InitiateUploadRequest>, guestToken: String? = null): List<InitiateUploadResponse> {
-        tripService.assertGuestAccess(tripId, guestToken) // guest capability required for uploads
-        tripService.getTrip(tripId) // verify trip exists
+    fun initiateUploads(tripId: UUID, requests: List<InitiateUploadRequest>, userId: UUID? = null, guestToken: String? = null): List<InitiateUploadResponse> {
+        tripService.assertTripAccess(tripId, userId, guestToken) // owner JWT (claimed) or guest token
         val existing = photoRepository.countByTripId(tripId)
         if (existing + requests.size > MAX_PHOTOS_PER_TRIP) {
             throw IllegalArgumentException("A book can hold at most $MAX_PHOTOS_PER_TRIP photos.")
@@ -140,9 +139,10 @@ class PhotoUploadService(
             if (req.contentType !in ALLOWED_CONTENT_TYPES) {
                 throw IllegalArgumentException("Unsupported file type: ${req.contentType}")
             }
-            if (req.fileSize > MAX_FILE_SIZE_BYTES) {
-                throw IllegalArgumentException("Each photo must be under ${MAX_FILE_SIZE_BYTES / (1024 * 1024)} MB.")
+            require(req.fileSize in 1..MAX_FILE_SIZE_BYTES) {
+                "Each photo must be between 1 byte and ${MAX_FILE_SIZE_BYTES / (1024 * 1024)} MB."
             }
+            req.thumbnailFileSize?.let { require(it in 1..MAX_FILE_SIZE_BYTES) { "Invalid thumbnail size" } }
             val ext = when (req.contentType) {
                 "image/jpeg" -> "jpg"
                 "image/png" -> "png"
@@ -183,8 +183,8 @@ class PhotoUploadService(
         }
     }
 
-    fun confirmUploads(tripId: UUID, confirmations: List<ConfirmUploadRequest>, guestToken: String? = null): List<Photo> {
-        tripService.assertGuestAccess(tripId, guestToken) // guest capability required for uploads
+    fun confirmUploads(tripId: UUID, confirmations: List<ConfirmUploadRequest>, userId: UUID? = null, guestToken: String? = null): List<Photo> {
+        tripService.assertTripAccess(tripId, userId, guestToken) // owner JWT (claimed) or guest token
         val trip = tripService.getTrip(tripId)
         val existing = photoRepository.countByTripId(tripId)
         if (existing + confirmations.size > MAX_PHOTOS_PER_TRIP) {

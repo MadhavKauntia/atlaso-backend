@@ -9,8 +9,9 @@ plugins {
 group = "com.atlaso"
 version = "0.0.1-SNAPSHOT"
 description = "Backend service for Atlaso travel photobooks"
-// Boot 3.5.16 (up from 3.5.9) pulls patched Spring Security (6.5.11, CVE-2026-22732 fixed in
-// 6.5.9) and Tomcat (10.1.59) via its managed BOM — security review #7.
+// Boot 3.5.16 (up from 3.5.9) pulls patched Spring Security 6.5.11 (CVE-2026-22732, fixed in
+// 6.5.9) and Tomcat 10.1.55 via its managed BOM — security review #7. Both are past the
+// vulnerable versions flagged (6.5.7 / 10.1.50).
 
 java {
 	toolchain {

@@ -30,30 +30,30 @@ class TripServiceTest {
     fun `guest access requires the matching token`() {
         val (trip, token) = newTrip()
         assertNotNull(trip.guestTokenHash)
-        svc.assertGuestAccess(trip.id!!, token) // correct token: no throw
-        assertThrows(GuestTokenException::class.java) { svc.assertGuestAccess(trip.id!!, "wrong-token") }
-        assertThrows(GuestTokenException::class.java) { svc.assertGuestAccess(trip.id!!, null) }
+        svc.assertTripAccess(trip.id!!, null, token) // correct token: no throw
+        assertThrows(GuestTokenException::class.java) { svc.assertTripAccess(trip.id!!, null, "wrong-token") }
+        assertThrows(GuestTokenException::class.java) { svc.assertTripAccess(trip.id!!, null, null) }
     }
 
     @Test
     fun `guest access is rejected on a claimed trip`() {
         val (trip, token) = newTrip()
         trip.user = User(id = UUID.randomUUID(), googleSub = "g", email = "o@x.com", name = "Owner")
-        assertThrows(GuestTokenException::class.java) { svc.assertGuestAccess(trip.id!!, token) }
+        assertThrows(GuestTokenException::class.java) { svc.assertTripAccess(trip.id!!, null, token) }
     }
 
     @Test
     fun `read access needs owner JWT once claimed, guest token before`() {
         val (trip, token) = newTrip()
         // Unclaimed: guest token works, owner-less read fails.
-        svc.assertReadAccess(trip.id!!, null, token)
-        assertThrows(GuestTokenException::class.java) { svc.assertReadAccess(trip.id!!, null, null) }
+        svc.assertTripAccess(trip.id!!, null, token)
+        assertThrows(GuestTokenException::class.java) { svc.assertTripAccess(trip.id!!, null, null) }
         // Claimed: only the owner's user id is allowed.
         val ownerId = UUID.randomUUID()
         trip.user = User(id = ownerId, googleSub = "g", email = "o@x.com", name = "Owner")
-        svc.assertReadAccess(trip.id!!, ownerId, null)
-        assertThrows(GuestTokenException::class.java) { svc.assertReadAccess(trip.id!!, UUID.randomUUID(), null) }
-        assertThrows(GuestTokenException::class.java) { svc.assertReadAccess(trip.id!!, null, token) }
+        svc.assertTripAccess(trip.id!!, ownerId, null)
+        assertThrows(GuestTokenException::class.java) { svc.assertTripAccess(trip.id!!, UUID.randomUUID(), null) }
+        assertThrows(GuestTokenException::class.java) { svc.assertTripAccess(trip.id!!, null, token) }
     }
 
     @Test

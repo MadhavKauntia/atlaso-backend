@@ -25,7 +25,16 @@ class RateLimiter {
     /** Returns true if this call is within [limit] for the current [windowSeconds] window on [key]. */
     fun tryAcquire(key: String, limit: Int, windowSeconds: Long): Boolean {
         val now = System.currentTimeMillis()
-        if (buckets.size >= MAX_BUCKETS) buckets.values.removeIf { now - it.startMs >= STALE_MS }
+        if (buckets.size >= MAX_BUCKETS) {
+            buckets.values.removeIf { now - it.startMs >= STALE_MS }
+            // Hard cap: if everything is still fresh, evict the oldest so rotating keys can't
+            // grow the map without bound (a fixed-window counter loss is an acceptable trade).
+            if (buckets.size >= MAX_BUCKETS) {
+                buckets.entries.sortedBy { it.value.startMs }
+                    .take(buckets.size - MAX_BUCKETS / 2)
+                    .forEach { buckets.remove(it.key) }
+            }
+        }
         var allowed = false
         buckets.compute(key) { _, existing ->
             val w = if (existing == null || now - existing.startMs >= windowSeconds * 1000) Window(now, 0) else existing
@@ -35,4 +44,7 @@ class RateLimiter {
         }
         return allowed
     }
+
+    /** Current number of tracked keys — exposed for tests asserting the map stays bounded. */
+    internal fun trackedKeys(): Int = buckets.size
 }

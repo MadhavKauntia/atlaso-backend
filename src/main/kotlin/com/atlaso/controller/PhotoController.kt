@@ -108,24 +108,27 @@ class PhotoController(
     }
 
     // Public — guest uploads before login
+    // Guest token (unclaimed) or owner JWT (claimed).
     @PostMapping("/initiate")
     fun initiateUploads(
         @PathVariable tripId: UUID,
         @RequestBody requests: List<InitiateUploadRequest>,
-        @RequestHeader(value = "X-Guest-Token", required = false) guestToken: String?
+        @RequestHeader(value = "X-Guest-Token", required = false) guestToken: String?,
+        @AuthenticationPrincipal jwt: Jwt?
     ): ResponseEntity<List<InitiateUploadResponse>> {
-        val responses = photoUploadService.initiateUploads(tripId, requests, guestToken)
+        val responses = photoUploadService.initiateUploads(tripId, requests, jwt?.subject?.let(UUID::fromString), guestToken)
         return ResponseEntity.ok(responses)
     }
 
-    // Public — guest uploads before login (requires the trip's guest token)
+    // Guest token (unclaimed) or owner JWT (claimed).
     @PostMapping("/confirm")
     fun confirmUploads(
         @PathVariable tripId: UUID,
         @RequestBody confirmations: List<ConfirmUploadRequest>,
-        @RequestHeader(value = "X-Guest-Token", required = false) guestToken: String?
+        @RequestHeader(value = "X-Guest-Token", required = false) guestToken: String?,
+        @AuthenticationPrincipal jwt: Jwt?
     ): ResponseEntity<List<PhotoResponse>> {
-        val photos = photoUploadService.confirmUploads(tripId, confirmations, guestToken)
+        val photos = photoUploadService.confirmUploads(tripId, confirmations, jwt?.subject?.let(UUID::fromString), guestToken)
         return ResponseEntity.status(HttpStatus.CREATED).body(photos.map { toResponse(it) })
     }
 

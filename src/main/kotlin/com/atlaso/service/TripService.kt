@@ -60,23 +60,18 @@ class TripService(
      * (or a tokenless legacy trip) can never be used. (Clear tokenless legacy trips before
      * launch; see the PR notes.)
      */
-    fun assertGuestAccess(tripId: UUID, guestToken: String?) {
-        val trip = tripRepository.findById(tripId).orElseThrow { TripNotFoundException(tripId) }
-        if (trip.user != null) throw GuestTokenException("This trip has been claimed — sign in to continue")
-        val hash = trip.guestTokenHash ?: throw GuestTokenException("Guest access is not available for this trip")
-        if (!tokenMatches(guestToken, hash)) throw GuestTokenException("Invalid or missing guest token")
-    }
-
     /**
-     * Read access to a trip by UUID: a claimed trip requires the owner's JWT; an unclaimed
-     * trip requires its guest token. Closes the "UUID is a public read password" gap on the
-     * trip/photo/image endpoints.
+     * Authorizes any by-UUID operation (read or guest upload) on a trip: a **claimed** trip
+     * requires the owner's JWT; an **unclaimed** trip requires its matching guest token. No
+     * grandfathering — a bare UUID (or a tokenless legacy trip) is never sufficient. This is
+     * the single dual-auth gate for guest reads AND the presigned upload flow, so a claimed
+     * trip's owner keeps upload access via their JWT.
      */
-    fun assertReadAccess(tripId: UUID, userId: UUID?, guestToken: String?) {
+    fun assertTripAccess(tripId: UUID, userId: UUID?, guestToken: String?) {
         val trip = tripRepository.findById(tripId).orElseThrow { TripNotFoundException(tripId) }
         val owner = trip.user
         if (owner != null) {
-            if (userId == null || owner.id != userId) throw GuestTokenException("Sign in as the owner to view this trip")
+            if (userId == null || owner.id != userId) throw GuestTokenException("Sign in as the owner to continue")
         } else {
             val hash = trip.guestTokenHash ?: throw GuestTokenException("Guest access is not available for this trip")
             if (!tokenMatches(guestToken, hash)) throw GuestTokenException("Invalid or missing guest token")

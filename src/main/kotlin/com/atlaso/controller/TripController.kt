@@ -41,7 +41,7 @@ class TripController(
         @RequestHeader(value = "X-Guest-Token", required = false) guestToken: String?,
         @AuthenticationPrincipal jwt: Jwt?
     ): ResponseEntity<TripResponse> {
-        tripService.assertReadAccess(id, jwt?.subject?.let(UUID::fromString), guestToken)
+        tripService.assertTripAccess(id, jwt?.subject?.let(UUID::fromString), guestToken)
         val trip = tripService.getTrip(id)
         return ResponseEntity.ok(TripResponse.from(trip))
     }
