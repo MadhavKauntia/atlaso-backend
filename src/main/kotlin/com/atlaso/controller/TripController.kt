@@ -34,9 +34,14 @@ class TripController(
         return ResponseEntity.ok(trips)
     }
 
-    // Public — needed by cover page and upload page before login
+    // Guest-readable before login with the guest token; owner JWT after claim.
     @GetMapping("/{id}")
-    fun getTrip(@PathVariable id: UUID): ResponseEntity<TripResponse> {
+    fun getTrip(
+        @PathVariable id: UUID,
+        @RequestHeader(value = "X-Guest-Token", required = false) guestToken: String?,
+        @AuthenticationPrincipal jwt: Jwt?
+    ): ResponseEntity<TripResponse> {
+        tripService.assertReadAccess(id, jwt?.subject?.let(UUID::fromString), guestToken)
         val trip = tripService.getTrip(id)
         return ResponseEntity.ok(TripResponse.from(trip))
     }

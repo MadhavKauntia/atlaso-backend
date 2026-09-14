@@ -60,13 +60,8 @@ class RateLimitInterceptor(
 
     private fun principalKey(request: HttpServletRequest): String {
         val sub = (SecurityContextHolder.getContext().authentication?.principal as? Jwt)?.subject
-        return sub ?: clientIp(request)
-    }
-
-    /** Real client IP behind Railway's proxy (first X-Forwarded-For hop), else remote address. */
-    private fun clientIp(request: HttpServletRequest): String {
-        val xff = request.getHeader("X-Forwarded-For")
-        if (!xff.isNullOrBlank()) return xff.split(",").first().trim()
-        return request.remoteAddr ?: "anon"
+        // remoteAddr is the real client IP via forward-headers-strategy=native (RemoteIpValve),
+        // not a spoofable header we parse ourselves.
+        return sub ?: (request.remoteAddr ?: "anon")
     }
 }

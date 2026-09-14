@@ -67,6 +67,22 @@ class TripService(
         if (!tokenMatches(guestToken, hash)) throw GuestTokenException("Invalid or missing guest token")
     }
 
+    /**
+     * Read access to a trip by UUID: a claimed trip requires the owner's JWT; an unclaimed
+     * trip requires its guest token. Closes the "UUID is a public read password" gap on the
+     * trip/photo/image endpoints.
+     */
+    fun assertReadAccess(tripId: UUID, userId: UUID?, guestToken: String?) {
+        val trip = tripRepository.findById(tripId).orElseThrow { TripNotFoundException(tripId) }
+        val owner = trip.user
+        if (owner != null) {
+            if (userId == null || owner.id != userId) throw GuestTokenException("Sign in as the owner to view this trip")
+        } else {
+            val hash = trip.guestTokenHash ?: throw GuestTokenException("Guest access is not available for this trip")
+            if (!tokenMatches(guestToken, hash)) throw GuestTokenException("Invalid or missing guest token")
+        }
+    }
+
     // Public lookup by ID — no ownership check (used by guest flow and public endpoints)
     fun getTrip(id: UUID): Trip {
         return tripRepository.findById(id).orElseThrow { TripNotFoundException(id) }

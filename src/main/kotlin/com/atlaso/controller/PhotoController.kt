@@ -72,10 +72,15 @@ class PhotoController(
         return ResponseEntity.status(status).body(BulkUploadResponse(uploaded = uploaded, failed = failed))
     }
 
-    // Public — guest trips have no user; ownership enforced elsewhere after claim
+    // Guest-readable with the trip's guest token; owner JWT after claim.
     @GetMapping
-    fun getPhotos(@PathVariable tripId: UUID): ResponseEntity<List<PhotoResponse>> {
-        val photos = photoUploadService.getPhotosForTrip(tripId).map { toResponse(it) }
+    fun getPhotos(
+        @PathVariable tripId: UUID,
+        @RequestHeader(value = "X-Guest-Token", required = false) guestToken: String?,
+        @AuthenticationPrincipal jwt: Jwt?
+    ): ResponseEntity<List<PhotoResponse>> {
+        val photos = photoUploadService.getPhotosForTrip(tripId, jwt?.subject?.let(UUID::fromString), guestToken)
+            .map { toResponse(it) }
         return ResponseEntity.ok(photos)
     }
 
@@ -127,9 +132,11 @@ class PhotoController(
     @GetMapping("/{photoId}/image")
     fun getPhotoImage(
         @PathVariable tripId: UUID,
-        @PathVariable photoId: UUID
+        @PathVariable photoId: UUID,
+        @RequestHeader(value = "X-Guest-Token", required = false) guestToken: String?,
+        @AuthenticationPrincipal jwt: Jwt?
     ): ResponseEntity<Void> {
-        val photo = photoUploadService.getPhotoByTripAndId(photoId, tripId)
+        val photo = photoUploadService.getPhotoByTripAndId(photoId, tripId, jwt?.subject?.let(UUID::fromString), guestToken)
         val url = storageService.getAccessUrl(photo.storageKey, photo.contentType)
         return ResponseEntity.status(HttpStatus.FOUND)
             .header(HttpHeaders.LOCATION, url)

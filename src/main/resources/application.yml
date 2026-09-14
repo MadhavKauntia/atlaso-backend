@@ -1,5 +1,9 @@
 server:
   port: ${PORT:8080}
+  # Let the container (Tomcat RemoteIpValve) resolve the real client IP + scheme from the
+  # proxy's forwarded headers, trusting only internal proxies — so request.remoteAddr is the
+  # client, not a spoofable first X-Forwarded-For hop.
+  forward-headers-strategy: native
 
 spring:
   application:

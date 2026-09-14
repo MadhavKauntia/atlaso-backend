@@ -6,8 +6,10 @@ import com.atlaso.controller.dto.InitiateUploadResponse
 import com.atlaso.domain.photo.GeoLocation
 import com.atlaso.domain.photo.Photo
 import com.atlaso.domain.photo.PhotoMetadata
+import com.atlaso.domain.photo.UploadGrant
 import com.atlaso.domain.trip.TripStatus
 import com.atlaso.repository.PhotoRepository
+import com.atlaso.repository.UploadGrantRepository
 import com.drew.imaging.ImageMetadataReader
 import com.drew.metadata.exif.ExifSubIFDDirectory
 import com.drew.metadata.exif.GpsDirectory
@@ -29,7 +31,8 @@ class PhotoNotFoundException(id: UUID) : RuntimeException("Photo not found: $id"
 class PhotoUploadService(
     private val photoRepository: PhotoRepository,
     private val storageService: StorageService,
-    private val tripService: TripService
+    private val tripService: TripService,
+    private val uploadGrantRepository: UploadGrantRepository
 ) {
     private val logger = LoggerFactory.getLogger(PhotoUploadService::class.java)
 
@@ -47,6 +50,7 @@ class PhotoUploadService(
         /** Caps that protect storage and (mainly) per-book vision-analysis cost. */
         const val MAX_PHOTOS_PER_TRIP = 1000
         const val MAX_FILE_SIZE_BYTES = 50L * 1024 * 1024 // 50 MB
+        const val MAX_IMAGE_DIMENSION = 30000 // sanity cap on client-declared width/height
     }
 
     fun uploadPhoto(tripId: UUID, file: MultipartFile, userId: UUID): Photo {
@@ -95,8 +99,8 @@ class PhotoUploadService(
     }
 
     @Transactional(readOnly = true)
-    fun getPhotosForTrip(tripId: UUID): List<Photo> {
-        tripService.getTrip(tripId) // verify trip exists
+    fun getPhotosForTrip(tripId: UUID, userId: UUID? = null, guestToken: String? = null): List<Photo> {
+        tripService.assertReadAccess(tripId, userId, guestToken)
         return photoRepository.findByTripId(tripId)
     }
 
@@ -108,7 +112,8 @@ class PhotoUploadService(
     }
 
     @Transactional(readOnly = true)
-    fun getPhotoByTripAndId(photoId: UUID, tripId: UUID): Photo {
+    fun getPhotoByTripAndId(photoId: UUID, tripId: UUID, userId: UUID? = null, guestToken: String? = null): Photo {
+        tripService.assertReadAccess(tripId, userId, guestToken)
         return photoRepository.findByIdAndTripId(photoId, tripId)
             .orElseThrow { PhotoNotFoundException(photoId) }
     }
@@ -157,6 +162,17 @@ class PhotoUploadService(
                 val key = "$tripId/${photoId}_thumb.jpg"
                 key to storageService.getUploadUrl(key, "image/jpeg", size)
             } ?: (null to null)
+            // Record the grant so confirm can only register a key we handed out, exactly once.
+            uploadGrantRepository.save(
+                UploadGrant(
+                    tripId = tripId,
+                    photoId = photoId,
+                    storageKey = storageKey,
+                    thumbnailKey = thumbKey,
+                    contentType = req.contentType,
+                    maxSizeBytes = req.fileSize,
+                )
+            )
             InitiateUploadResponse(
                 photoId = photoId,
                 storageKey = storageKey,
@@ -174,33 +190,30 @@ class PhotoUploadService(
         if (existing + confirmations.size > MAX_PHOTOS_PER_TRIP) {
             throw IllegalArgumentException("A book can hold at most $MAX_PHOTOS_PER_TRIP photos.")
         }
-        val prefix = "$tripId/"
         val photos = confirmations.map { conf ->
-            // Keys must belong to THIS trip's prefix — a client can't confirm another trip's
-            // object (or an arbitrary path) into this trip.
-            require(conf.storageKey.startsWith(prefix) && !conf.storageKey.contains("..")) {
-                "Storage key does not belong to this trip"
-            }
-            conf.thumbnailStorageKey?.let {
-                require(it.startsWith(prefix) && !it.contains("..")) { "Thumbnail key does not belong to this trip" }
-            }
-            require(conf.contentType in ALLOWED_CONTENT_TYPES) { "Unsupported file type: ${conf.contentType}" }
-            require(conf.fileSize in 1..MAX_FILE_SIZE_BYTES) { "Invalid file size" }
-            // The object must actually exist (client can't register a key that was never uploaded).
-            require(storageService.exists(conf.storageKey)) { "Uploaded object not found for ${conf.storageKey}" }
-            conf.thumbnailStorageKey?.let { require(storageService.exists(it)) { "Thumbnail object not found" } }
+            // Bind to the server-recorded initiation: only a key we handed out for THIS photo
+            // on THIS trip can be confirmed, once, and the object must actually exist.
+            val grant = uploadGrantRepository.findByPhotoIdAndTripId(conf.photoId, tripId)
+                ?: throw IllegalArgumentException("No upload was initiated for this photo")
+            require(!grant.consumed) { "This upload was already confirmed" }
+            require(grant.storageKey == conf.storageKey) { "Storage key does not match the initiated upload" }
+            require(grant.thumbnailKey == conf.thumbnailStorageKey) { "Thumbnail key does not match the initiated upload" }
+            require(storageService.exists(grant.storageKey)) { "Uploaded object not found" }
+            grant.thumbnailKey?.let { require(storageService.exists(it)) { "Thumbnail object not found" } }
+            grant.consumed = true
+            uploadGrantRepository.save(grant)
 
             val takenAt = conf.takenAt?.let { Instant.ofEpochMilli(it) }
             Photo(
                 trip = trip,
-                storageKey = conf.storageKey,
-                thumbnailKey = conf.thumbnailStorageKey,
+                storageKey = grant.storageKey,          // server-recorded key, not the client's
+                thumbnailKey = grant.thumbnailKey,
                 originalFilename = conf.originalFilename,
-                contentType = conf.contentType,
-                fileSize = conf.fileSize,
+                contentType = grant.contentType,        // server-recorded content type
+                fileSize = grant.maxSizeBytes,          // presigned PUT bound Content-Length to this
                 metadata = PhotoMetadata(
-                    width = conf.width,
-                    height = conf.height,
+                    width = conf.width.coerceIn(0, MAX_IMAGE_DIMENSION),
+                    height = conf.height.coerceIn(0, MAX_IMAGE_DIMENSION),
                     takenAt = takenAt,
                     location = if (conf.latitude != null && conf.longitude != null)
                         GeoLocation(conf.latitude, conf.longitude) else null,
