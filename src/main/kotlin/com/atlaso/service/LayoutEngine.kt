@@ -111,9 +111,8 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
     /** A same-slot-count variant of a layout, used to break identical runs. */
     private fun siblingLayout(layout: Layout, group: PhotoGroup): Layout? {
         return when (layout) {
-            Layout.FOUR_GRID -> Layout.FOUR_MIXED
-            Layout.FOUR_MIXED -> Layout.FOUR_GRID
-            // TWO_VERTICAL is disabled, so a two-photo page has no same-count sibling.
+            // FOUR_GRID and TWO_HORIZONTAL (TWO_VERTICAL is disabled) have no same-count
+            // sibling to swap to.
             Layout.TWO_HORIZONTAL -> null
             Layout.SINGLE_FULL -> Layout.SINGLE_FRAMED
             Layout.HERO_LANDSCAPE -> Layout.SINGLE_FRAMED
@@ -151,7 +150,7 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
             1 -> chooseSingle(photos[0], group)
             2 -> Layout.TWO_HORIZONTAL // two-photo pages always stack; vertical split disabled
             3 -> Layout.THREE_GRID
-            else -> chooseFour(photos, group, prev)
+            else -> Layout.FOUR_GRID // four-photo pages use the 2x2 grid
         }
     }
 
@@ -168,16 +167,6 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
             s.shotDistance == "closeup" || s.negativeSpace == "high" -> Layout.SINGLE_FRAMED
             else -> fullBleed
         }
-    }
-
-    private fun chooseFour(photos: List<Photo>, group: PhotoGroup, prev: Layout?): Layout {
-        val scores = photos.map { group.standaloneScores[it.id] ?: 0.0 }.sortedDescending()
-        val top = scores.first()
-        val restAvg = scores.drop(1).average()
-        // One clearly stronger (but not solo-worthy) photo → give it more space.
-        val oneStandsOut = top - restAvg >= 0.12 && top >= 0.6
-        // Also break up a run of identical grids.
-        return if (oneStandsOut || prev == Layout.FOUR_GRID) Layout.FOUR_MIXED else Layout.FOUR_GRID
     }
 
     /** Fraction of the photo still visible after cover-fitting it to a portrait page. */
@@ -237,13 +226,6 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
                 0 -> Pair(Position(0.0, 0.0), Size(1.0, 0.5))
                 1 -> Pair(Position(0.0, 0.5), Size(0.5, 0.5))
                 else -> Pair(Position(0.5, 0.5), Size(0.5, 0.5))
-            }
-
-            Layout.FOUR_MIXED -> when (index) {
-                0 -> Pair(Position(0.0, 0.0), Size(1.0, 0.6))       // featured top
-                1 -> Pair(Position(0.0, 0.6), Size(1.0 / 3, 0.4))
-                2 -> Pair(Position(1.0 / 3, 0.6), Size(1.0 / 3, 0.4))
-                else -> Pair(Position(2.0 / 3, 0.6), Size(1.0 / 3, 0.4))
             }
 
             Layout.FOUR_GRID -> {

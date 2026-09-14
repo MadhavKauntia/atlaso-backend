@@ -8,6 +8,5 @@ enum class Layout {
     TWO_VERTICAL,       // two side-by-side (each half width, full height)
     THREE_GRID,         // one featured top + two below (THREE_FEATURE)
     FOUR_GRID,          // 2x2
-    FOUR_MIXED,         // one larger featured + three smaller
     DOUBLE_PAGE_FULL_BLEED // one landscape across two facing pages
 }
