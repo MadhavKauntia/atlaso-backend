@@ -150,7 +150,19 @@ class PhotoUploadService(
             // Bind Content-Length into the presigned PUT so a stolen URL can't be
             // used to upload an object larger than the declared (capped) size.
             val uploadUrl = storageService.getUploadUrl(storageKey, req.contentType, req.fileSize)
-            InitiateUploadResponse(photoId = photoId, storageKey = storageKey, uploadUrl = uploadUrl)
+            // If the client generated a thumbnail, also hand back a presigned PUT
+            // for it (always JPEG, Content-Length bound to the declared size).
+            val (thumbKey, thumbUploadUrl) = req.thumbnailFileSize?.let { size ->
+                val key = "$tripId/${photoId}_thumb.jpg"
+                key to storageService.getUploadUrl(key, "image/jpeg", size)
+            } ?: (null to null)
+            InitiateUploadResponse(
+                photoId = photoId,
+                storageKey = storageKey,
+                uploadUrl = uploadUrl,
+                thumbnailStorageKey = thumbKey,
+                thumbnailUploadUrl = thumbUploadUrl
+            )
         }
     }
 
@@ -165,6 +177,7 @@ class PhotoUploadService(
             Photo(
                 trip = trip,
                 storageKey = conf.storageKey,
+                thumbnailKey = conf.thumbnailStorageKey,
                 originalFilename = conf.originalFilename,
                 contentType = conf.contentType,
                 fileSize = conf.fileSize,
@@ -191,6 +204,7 @@ class PhotoUploadService(
         val photo = photoRepository.findByIdAndTripId(photoId, tripId)
             .orElseThrow { PhotoNotFoundException(photoId) }
         storageService.delete(photo.storageKey)
+        photo.thumbnailKey?.let { runCatching { storageService.delete(it) } }
         photoRepository.delete(photo)
         logger.info("Deleted photo: {}", photoId)
     }

@@ -22,6 +22,12 @@ data class Photo(
     @Column(nullable = false, unique = true, name = "storage_key")
     val storageKey: String,
 
+    // Optional small (~360px) display derivative uploaded alongside the full
+    // image, so thumbnail-heavy views (preview rail, picker) load ~25KB instead
+    // of the full-res original. Null for photos uploaded before this existed.
+    @Column(name = "thumbnail_key", length = 512)
+    var thumbnailKey: String? = null,
+
     @Column(nullable = false, name = "original_filename")
     val originalFilename: String,
 

@@ -25,10 +25,13 @@ class PhotoController(
     private val storageService: StorageService
 ) {
 
-    /** Builds a PhotoResponse including a direct (presigned) image URL. */
+    /** Builds a PhotoResponse including direct (presigned) image + thumbnail URLs. */
     private fun toResponse(photo: com.atlaso.domain.photo.Photo): PhotoResponse {
         val url = runCatching { storageService.getAccessUrl(photo.storageKey, photo.contentType) }.getOrNull()
-        return PhotoResponse.from(photo, url)
+        val thumbUrl = photo.thumbnailKey?.let {
+            runCatching { storageService.getAccessUrl(it, "image/jpeg") }.getOrNull()
+        }
+        return PhotoResponse.from(photo, url, thumbUrl)
     }
 
     @PostMapping
