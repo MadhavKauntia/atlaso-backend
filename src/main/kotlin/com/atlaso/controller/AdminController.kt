@@ -46,4 +46,22 @@ class AdminController(
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"$filename\"")
             .body(bytes)
     }
+
+    @GetMapping("/orders/{id}/cover-pdf")
+    fun coverPdf(@PathVariable id: UUID): ResponseEntity<ByteArray> {
+        val (bytes, filename) = adminService.coverPdf(id)
+        return ResponseEntity.ok()
+            .contentType(MediaType.APPLICATION_PDF)
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"$filename\"")
+            .body(bytes)
+    }
+
+    @GetMapping("/orders/{id}/pdfs")
+    fun pdfsZip(@PathVariable id: UUID): ResponseEntity<ByteArray> {
+        val (bytes, filename) = adminService.pdfsZip(id)
+        return ResponseEntity.ok()
+            .contentType(MediaType.parseMediaType("application/zip"))
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"$filename\"")
+            .body(bytes)
+    }
 }

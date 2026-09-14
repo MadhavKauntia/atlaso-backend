@@ -5,12 +5,15 @@ import com.atlaso.controller.dto.CreateCouponRequest
 import com.atlaso.domain.coupon.Coupon
 import com.atlaso.service.CouponService
 import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
 import java.time.Instant
+import java.util.UUID
 
 /**
  * Admin coupon management. Guarded by [com.atlaso.config.AdminKeyInterceptor]
@@ -42,6 +45,12 @@ class AdminCouponController(
             maxUses = req.maxUses,
         )
         return ResponseEntity.ok(couponService.save(coupon).toDto())
+    }
+
+    @DeleteMapping("/{id}")
+    fun delete(@PathVariable id: UUID): ResponseEntity<Void> {
+        couponService.delete(id)
+        return ResponseEntity.noContent().build()
     }
 
     private fun Coupon.toDto() = AdminCouponDto(

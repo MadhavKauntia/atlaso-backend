@@ -80,6 +80,9 @@ class CouponService(
         return couponRepository.save(toSave)
     }
 
+    /** Admin: delete a coupon by id. */
+    fun delete(id: java.util.UUID) = couponRepository.deleteById(id)
+
     /** Bumps the redemption counter after a real paid order — best-effort. */
     fun recordRedemption(coupon: Coupon) {
         coupon.id?.let { couponRepository.incrementUsage(it) }
