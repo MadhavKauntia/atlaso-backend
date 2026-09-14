@@ -90,8 +90,8 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
         return when (layout) {
             Layout.FOUR_GRID -> Layout.FOUR_MIXED
             Layout.FOUR_MIXED -> Layout.FOUR_GRID
-            Layout.TWO_HORIZONTAL -> Layout.TWO_VERTICAL
-            Layout.TWO_VERTICAL -> Layout.TWO_HORIZONTAL
+            // TWO_VERTICAL is disabled, so a two-photo page has no same-count sibling.
+            Layout.TWO_HORIZONTAL -> null
             Layout.SINGLE_FULL -> Layout.SINGLE_FRAMED
             Layout.HERO_LANDSCAPE -> Layout.SINGLE_FRAMED
             Layout.SINGLE_FRAMED -> {
@@ -126,7 +126,7 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
         val photos = group.photos
         return when (photos.size) {
             1 -> chooseSingle(photos[0], group)
-            2 -> chooseTwo(photos)
+            2 -> Layout.TWO_HORIZONTAL // two-photo pages always stack; vertical split disabled
             3 -> Layout.THREE_GRID
             else -> chooseFour(photos, group, prev)
         }
@@ -144,15 +144,6 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
             s.settingScope == "environment" || s.shotDistance == "wide" -> fullBleed // immersive
             s.shotDistance == "closeup" || s.negativeSpace == "high" -> Layout.SINGLE_FRAMED
             else -> fullBleed
-        }
-    }
-
-    private fun chooseTwo(photos: List<Photo>): Layout {
-        val orientations = photos.map { Orientation.from(it.metadata.width, it.metadata.height) }
-        return when {
-            orientations.all { it == Orientation.PORTRAIT } -> Layout.TWO_VERTICAL   // two tall halves
-            orientations.all { it == Orientation.LANDSCAPE } -> Layout.TWO_HORIZONTAL // two wide halves
-            else -> Layout.TWO_HORIZONTAL
         }
     }
 
