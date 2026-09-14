@@ -20,6 +20,8 @@ class AdminService(
     private val receiptRenderer: ReceiptRenderer,
     private val storageService: StorageService,
 ) {
+    private val logger = org.slf4j.LoggerFactory.getLogger(AdminService::class.java)
+
     fun listOrders(): List<AdminOrderDto> =
         orderRepository.findAllByOrderByCreatedAtDesc().map { AdminOrderDto.from(it) }
 
@@ -29,7 +31,9 @@ class AdminService(
         order.status = "SHIPPED"
         order.shippedAt = Instant.now()
         order.trackingNumber = trackingNumber?.ifBlank { null }
-        return AdminOrderDto.from(orderRepository.save(order))
+        val saved = orderRepository.save(order)
+        logger.info("Order ATL-{} marked SHIPPED (tracking: {})", saved.number, saved.trackingNumber ?: "none")
+        return AdminOrderDto.from(saved)
     }
 
     fun receiptPdf(orderId: UUID): Pair<ByteArray, String> {

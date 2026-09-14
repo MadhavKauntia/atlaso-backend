@@ -25,6 +25,8 @@ class PhotoController(
     private val storageService: StorageService
 ) {
 
+    private val logger = org.slf4j.LoggerFactory.getLogger(PhotoController::class.java)
+
     /** Builds a PhotoResponse including direct (presigned) image + thumbnail URLs. */
     private fun toResponse(photo: com.atlaso.domain.photo.Photo): PhotoResponse {
         val url = runCatching { storageService.getAccessUrl(photo.storageKey, photo.contentType) }.getOrNull()
@@ -61,6 +63,7 @@ class PhotoController(
                 val photo = photoUploadService.uploadPhoto(tripId, file, userId)
                 uploaded.add(toResponse(photo))
             } catch (e: Exception) {
+                logger.warn("Bulk upload failed for '{}' in trip {}: {}", filename, tripId, e.message, e)
                 failed.add(BulkUploadFailure(filename = filename, error = e.message ?: "Unknown error"))
             }
         }

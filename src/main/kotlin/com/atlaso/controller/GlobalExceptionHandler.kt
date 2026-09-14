@@ -65,6 +65,11 @@ class GlobalExceptionHandler {
         message: String?,
         request: HttpServletRequest
     ): ResponseEntity<ErrorResponse> {
+        // Surface handled client errors so they're visible in Axiom (5xx already logged at
+        // ERROR by handleGeneral). Without this, every 400/401/404 vanishes silently.
+        if (status.is4xxClientError) {
+            logger.warn("{} {} -> {} {}", request.method, request.requestURI, status.value(), message)
+        }
         val error = ErrorResponse(
             status = status.value(),
             error = status.reasonPhrase,
