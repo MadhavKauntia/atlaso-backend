@@ -83,6 +83,29 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
             val idx = (from until planned.size - 1).lastOrNull { isQuiet(planned[it]) }
             if (idx != null) planned.add(planned.removeAt(idx))
         }
+
+        // People early: establish who took the trip. Guarantee a page featuring people
+        // within the first three, pulling the earliest one up if none is present.
+        ensurePeopleEarly(planned)
+    }
+
+    /**
+     * A photo of people must appear within the first three pages. If it doesn't, move
+     * the earliest people page up — sitting behind an establishing opener when there is
+     * one, otherwise leading the book.
+     */
+    private fun ensurePeopleEarly(planned: MutableList<Planned>) {
+        if (planned.size < 2) return
+        val window = minOf(3, planned.size)
+        if ((0 until window).any { isPeoplePage(planned[it]) }) return
+        val idx = (window until planned.size).firstOrNull { isPeoplePage(planned[it]) } ?: return
+        val target = if (isEstablishing(planned[0])) 1 else 0
+        planned.add(target, planned.removeAt(idx))
+    }
+
+    private fun isPeoplePage(p: Planned): Boolean = p.group.photos.any { photo ->
+        val s = photo.signals ?: return@any false
+        s.facesCount >= 1 || s.subjectType == "person" || s.subjectType == "couple" || s.subjectType == "group"
     }
 
     /** A same-slot-count variant of a layout, used to break identical runs. */

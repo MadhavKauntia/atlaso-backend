@@ -23,6 +23,10 @@ class PhotoGrouper {
 
     companion object {
         const val TARGET_PAGE_COUNT = 50
+
+        // A page holds only 1, 2, or 4 photos — never 3. Every chunk / merge / split
+        // below is required to preserve this invariant.
+        private val LEGAL_PAGE_SIZES = setOf(1, 2, 4)
         private const val MAX_PHOTOS_PER_PAGE = 4
 
         // A gap between two photos starts a new episode when its boundary score clears
@@ -34,21 +38,39 @@ class PhotoGrouper {
         // lower still qualifies for the single best photo of a decent episode.
         private const val HERO_THRESHOLD = StandaloneScorer.STRONG_THRESHOLD // 0.75
         private const val HERO_PROMOTE_THRESHOLD = 0.68
+
+        // Near-duplicate curation (req: no more than 2 similar shots per event).
+        // Within an episode, photos that share subject + people + composition + place
+        // collapse to their single strongest frame, and keep a 2nd only when it is
+        // nearly as strong (within this fraction of the best).
+        private const val DUP_KEEP_SECOND_RATIO = 0.85
+
+        // Book length is fixed at TARGET_PAGE_COUNT. When aggressive dedup + coverage
+        // leave too few photos to build a good book, we relax dedup (pull duplicates
+        // back) toward this many photos rather than padding with weak images.
+        private const val FILL_RATIO = 1.6
     }
 
     /** A page under construction (before it becomes an immutable PhotoGroup). */
-    private data class DraftPage(val photos: MutableList<Photo>, var isHero: Boolean)
+    private data class DraftPage(val photos: MutableList<Photo>, var isHero: Boolean) {
+        val size: Int get() = photos.size
+    }
+
+    /** Result of the curation pass: kept photos per episode + the coverage-protected ids. */
+    private data class Curation(val episodes: List<List<Photo>>, val protectedIds: Set<UUID>)
 
     /**
-     * Groups photos into exactly [targetPages] page groups.
+     * Groups photos into exactly [targetPages] page groups (or fewer when there are
+     * genuinely too few photos to fill the book).
      *
-     * 1. Sort chronologically.
-     * 2. Split into natural episodes at high-scoring boundaries (variable count).
+     * 1. Sort chronologically, split into natural episodes.
+     * 2. Curate each episode: guarantee coverage (keep every event's strongest photo),
+     *    cap near-duplicates at 2, and — only if that leaves too few photos — relax
+     *    dedup to fill the book instead of padding with weak images.
      * 3. Per episode: reserve strong standalone photos as solo pages, chunk the rest
-     *    into multi-photo pages — so episodes occupy different numbers of pages and
-     *    strong images get their own page.
-     * 4. Normalize the draft to exactly [targetPages] by merging weak pages (too many)
-     *    or splitting dense pages / separating deserving images (too few).
+     *    into pages of 1/2/4 photos.
+     * 4. Normalize to exactly [targetPages], always preserving the 1/2/4 invariant and
+     *    never dropping a coverage-protected photo.
      */
     fun group(photos: List<Photo>, targetPages: Int = TARGET_PAGE_COUNT): List<PhotoGroup> {
         if (photos.isEmpty()) return emptyList()
@@ -58,39 +80,33 @@ class PhotoGrouper {
         val sorted = photos
             .sortedBy { it.originalFilename }
             .sortedWith(compareBy(nullsLast()) { it.metadata.takenAt })
-        val n = sorted.size
-
-        // Fewer photos than pages: one photo per page, strongest marked as heroes.
-        if (n <= targetPages) {
-            val scores = StandaloneScorer.scoreEpisode(sorted)
-            return sorted.map { p ->
-                val s = p.id?.let { scores[it] } ?: 0.0
-                PhotoGroup(
-                    photos = listOf(p),
-                    representativeTime = p.metadata.takenAt,
-                    standaloneScores = p.id?.let { mapOf(it to s) } ?: emptyMap(),
-                    isHero = s >= HERO_PROMOTE_THRESHOLD
-                )
-            }
-        }
 
         val episodes = detectEpisodes(sorted)
 
-        // Episode-relative standalone scores for every photo (used for heroes + layout).
+        // Episode-relative standalone scores for every photo (used for dedup, heroes, layout).
         val standaloneById = HashMap<UUID, Double>()
         episodes.forEach { ep -> standaloneById.putAll(StandaloneScorer.scoreEpisode(ep)) }
 
-        // Draft pages, episode by episode, in chronological order.
-        val draft = mutableListOf<DraftPage>()
-        episodes.forEach { ep -> draft.addAll(buildEpisodePages(ep, standaloneById)) }
+        // Coverage-first curation: dedup near-duplicates, protect one photo per episode,
+        // relax dedup to fill the book if needed.
+        val curation = curate(episodes, standaloneById, targetPages)
 
-        // Normalize to exactly the target page count.
-        while (draft.size > targetPages) reduceOnePage(draft, standaloneById)
-        while (draft.size < targetPages) expandOnePage(draft, standaloneById)
+        // Draft pages, episode by episode, in chronological order (each page 1/2/4).
+        val draft = mutableListOf<DraftPage>()
+        curation.episodes.forEach { ep -> if (ep.isNotEmpty()) draft.addAll(buildEpisodePages(ep, standaloneById)) }
+
+        // Normalize to exactly the target page count, preserving legal sizes + coverage.
+        while (draft.size > targetPages) reduceOnePage(draft, standaloneById, curation.protectedIds)
+        while (draft.size < targetPages) { if (!expandOnePage(draft, standaloneById)) break }
+
+        require(draft.all { it.size in LEGAL_PAGE_SIZES }) {
+            "Illegal page size produced: ${draft.map { it.size }.filter { it !in LEGAL_PAGE_SIZES }}"
+        }
 
         logger.info(
-            "Grouped {} photos into {} pages across {} episodes ({} hero pages)",
-            n, draft.size, episodes.size, draft.count { it.isHero }
+            "Grouped {} photos into {} pages across {} episodes ({} hero pages, {} kept after curation)",
+            sorted.size, draft.size, episodes.size, draft.count { it.isHero },
+            curation.episodes.sumOf { it.size }
         )
 
         return draft.map { dp -> toPhotoGroup(dp, standaloneById) }
@@ -111,8 +127,88 @@ class PhotoGrouper {
     }
 
     /**
+     * Coverage-first curation.
+     *
+     * Per episode: cluster near-duplicate shots (same subject + people + composition +
+     * place) and keep the strongest of each cluster — plus a 2nd only when it is nearly
+     * as strong. The episode's overall best photo is *protected* so normalization can
+     * never drop an event entirely (req: reserve ≥1 usable photo from every event).
+     *
+     * The rest become "surplus". Book length is fixed, so if kept photos fall short of
+     * what a good book needs we relax dedup: pull the highest-scoring surplus (i.e. the
+     * best near-duplicates) back in — never low-quality padding.
+     */
+    private fun curate(
+        episodes: List<List<Photo>>,
+        scores: Map<UUID, Double>,
+        targetPages: Int
+    ): Curation {
+        val protectedIds = HashSet<UUID>()
+        val keptByEpisode = ArrayList<MutableList<Photo>>(episodes.size)
+        val surplusIds = HashSet<UUID>()
+        var available = 0
+
+        for (ep in episodes) {
+            available += ep.size
+            // Protect the episode's strongest photo — its guaranteed representative.
+            ep.maxByOrNull { scores[it.id] ?: 0.0 }?.id?.let { protectedIds.add(it) }
+
+            val kept = mutableListOf<Photo>()
+            ep.groupBy { dupSignature(it) }.forEach { (_, cluster) ->
+                val ranked = cluster.sortedByDescending { scores[it.id] ?: 0.0 }
+                kept.add(ranked[0])
+                if (ranked.size >= 2) {
+                    val best = scores[ranked[0].id] ?: 0.0
+                    val second = scores[ranked[1].id] ?: 0.0
+                    if (second >= best * DUP_KEEP_SECOND_RATIO) {
+                        kept.add(ranked[1])
+                        ranked.drop(2).forEach { it.id?.let(surplusIds::add) }
+                    } else {
+                        ranked.drop(1).forEach { it.id?.let(surplusIds::add) }
+                    }
+                }
+            }
+            keptByEpisode.add(kept)
+        }
+
+        val keptCount = keptByEpisode.sumOf { it.size }
+        val desired = minOf(available, (targetPages * FILL_RATIO).toInt())
+        if (keptCount < desired && surplusIds.isNotEmpty()) {
+            val need = desired - keptCount
+            val addBack = episodes.flatten()
+                .filter { it.id in surplusIds }
+                .sortedByDescending { scores[it.id] ?: 0.0 }
+                .take(need)
+                .mapNotNull { it.id }
+                .toHashSet()
+            if (addBack.isNotEmpty()) {
+                for (i in episodes.indices) {
+                    val extra = episodes[i].filter { it.id in addBack }
+                    if (extra.isNotEmpty()) keptByEpisode[i].addAll(extra)
+                }
+            }
+        }
+
+        val curated = keptByEpisode.map { it.sortedWith(compareBy(nullsLast()) { p -> p.metadata.takenAt }) }
+        return Curation(curated, protectedIds)
+    }
+
+    /** Signature identifying near-duplicate shots: same subject, framing, people count, place. */
+    private fun dupSignature(p: Photo): String {
+        val s = p.signals ?: return "unique-${p.id}"
+        val faces = when {
+            s.facesCount <= 0 -> "0"
+            s.facesCount == 1 -> "1"
+            s.facesCount <= 3 -> "2-3"
+            else -> "4+"
+        }
+        val place = s.locationTag ?: s.sceneType ?: "?"
+        return "${s.subjectType}|${s.shotDistance}|$faces|$place"
+    }
+
+    /**
      * Reserves strong standalone photos as solo pages (inline, preserving chronology)
-     * and chunks the remaining photos into collage pages of up to [MAX_PHOTOS_PER_PAGE].
+     * and chunks the remaining photos into pages of 1/2/4.
      */
     private fun buildEpisodePages(episode: List<Photo>, scores: Map<UUID, Double>): List<DraftPage> {
         val heroIds = episode.filter { (scores[it.id] ?: 0.0) >= HERO_THRESHOLD }.mapNotNull { it.id }.toMutableSet()
@@ -126,7 +222,7 @@ class PhotoGrouper {
         var buffer = mutableListOf<Photo>()
         fun flush() {
             if (buffer.isEmpty()) return
-            buffer.chunked(MAX_PHOTOS_PER_PAGE).forEach { pages.add(DraftPage(it.toMutableList(), isHero = false)) }
+            chunkLegal(buffer).forEach { pages.add(DraftPage(it.toMutableList(), isHero = false)) }
             buffer = mutableListOf()
         }
         for (photo in episode) {
@@ -141,34 +237,74 @@ class PhotoGrouper {
         return pages
     }
 
-    /** Removes one page: merge the weakest collage page into a neighbour (heroes last resort). */
-    private fun reduceOnePage(draft: MutableList<DraftPage>, scores: Map<UUID, Double>) {
-        val collageIdx = draft.indices.filter { !draft[it].isHero }
-        val idx = (collageIdx.minByOrNull { pageScore(draft[it], scores) })
-            ?: draft.indices.minByOrNull { pageScore(draft[it], scores) }!!
-
-        val removed = draft.removeAt(idx)
-        if (draft.isEmpty()) { draft.add(removed); return } // nothing to merge into
-
-        // Merge into the neighbour with the fewest photos, preferring a collage.
-        val candidates = listOfNotNull(
-            (idx - 1).takeIf { it in draft.indices },
-            idx.takeIf { it in draft.indices } // element formerly at idx+1
-        )
-        val target = candidates.filter { !draft[it].isHero }.minByOrNull { draft[it].photos.size }
-            ?: candidates.minByOrNull { draft[it].photos.size }!!
-
-        val merged = (draft[target].photos + removed.photos)
-            .sortedByDescending { scores[it.id] ?: 0.0 }
-            .take(MAX_PHOTOS_PER_PAGE)
-            .toMutableList()
-        draft[target] = DraftPage(merged, isHero = merged.size == 1 && draft[target].isHero)
+    /**
+     * Splits a chronological run of photos into pages of legal size (4/2/1), minimizing
+     * lonely singles: a remainder of 3 becomes a 2-page + a single rather than a 3-page.
+     */
+    private fun chunkLegal(photos: List<Photo>): List<List<Photo>> {
+        val out = mutableListOf<List<Photo>>()
+        var idx = 0
+        var rem = photos.size
+        while (rem > 0) {
+            val take = when {
+                rem >= 4 -> 4          // 5→4+.., 6→4+.., 7→4+(3→2+1)
+                rem == 3 -> 2          // 3 → 2 then 1
+                else -> rem            // 1 or 2
+            }
+            out.add(photos.subList(idx, idx + take))
+            idx += take
+            rem -= take
+        }
+        return out
     }
 
-    /** Adds one page: split the densest collage page, or separate a deserving image. */
-    private fun expandOnePage(draft: MutableList<DraftPage>, scores: Map<UUID, Double>) {
-        val idx = draft.indices.filter { draft[it].photos.size >= 2 }
-            .maxByOrNull { draft[it].photos.size } ?: return
+    /**
+     * Removes one page to hit the target count. Merges the two adjacent pages whose
+     * combination loses the fewest photos (prefer non-heroes, then the weakest region),
+     * always producing a legal 1/2/4 page and never dropping a coverage-protected photo.
+     */
+    private fun reduceOnePage(draft: MutableList<DraftPage>, scores: Map<UUID, Double>, protectedIds: Set<UUID>) {
+        if (draft.size < 2) return
+
+        data class Merge(val i: Int, val drops: Int, val heroPenalty: Int, val combinedScore: Double)
+
+        val best = (0 until draft.size - 1).map { i ->
+            val a = draft[i]; val b = draft[i + 1]
+            val sum = a.size + b.size
+            val legal = if (sum >= 4) 4 else 2 // sum is ≥2; 3 collapses to 2
+            val drops = (sum - legal).coerceAtLeast(0)
+            val heroPenalty = (if (a.isHero) 1 else 0) + (if (b.isHero) 1 else 0)
+            val combined = a.photos.sumOf { scores[it.id] ?: 0.0 } + b.photos.sumOf { scores[it.id] ?: 0.0 }
+            Merge(i, drops, heroPenalty, combined)
+        }.minWithOrNull(compareBy({ it.drops }, { it.heroPenalty }, { it.combinedScore }))!!
+
+        val i = best.i
+        val all = draft[i].photos + draft[i + 1].photos
+        val (protectedPhotos, others) = all.partition { it.id in protectedIds }
+        val baseSize = if (all.size >= 4) 4 else 2
+        val keepCount = legalCeil(maxOf(baseSize, protectedPhotos.size))
+        val kept = (protectedPhotos + others.sortedByDescending { scores[it.id] ?: 0.0 })
+            .take(keepCount)
+            .toMutableList()
+
+        draft[i] = DraftPage(kept, isHero = keepCount == 1 && (draft[i].isHero || draft[i + 1].isHero))
+        draft.removeAt(i + 1)
+    }
+
+    /** Rounds a photo count up to the nearest legal page size (1, 2, or 4). */
+    private fun legalCeil(n: Int): Int = when {
+        n <= 1 -> 1
+        n == 2 -> 2
+        else -> 4
+    }
+
+    /**
+     * Adds one page to hit the target count by splitting the densest page in half
+     * (4 → 2+2, 2 → 1+1). Returns false when no page can be split (all singles), so the
+     * caller stops instead of looping forever.
+     */
+    private fun expandOnePage(draft: MutableList<DraftPage>, scores: Map<UUID, Double>): Boolean {
+        val idx = draft.indices.filter { draft[it].size >= 2 }.maxByOrNull { draft[it].size } ?: return false
 
         val byTime = draft[idx].photos.sortedWith(compareBy(nullsLast()) { it.metadata.takenAt })
         val mid = byTime.size / 2
@@ -177,13 +313,11 @@ class PhotoGrouper {
 
         draft[idx] = DraftPage(left, isHero = isSoloHero(left, scores))
         draft.add(idx + 1, DraftPage(right, isHero = isSoloHero(right, scores)))
+        return true
     }
 
     private fun isSoloHero(photos: List<Photo>, scores: Map<UUID, Double>): Boolean =
         photos.size == 1 && (scores[photos[0].id] ?: 0.0) >= HERO_PROMOTE_THRESHOLD
-
-    private fun pageScore(page: DraftPage, scores: Map<UUID, Double>): Double =
-        page.photos.sumOf { scores[it.id] ?: 0.0 }
 
     private fun toPhotoGroup(dp: DraftPage, scores: Map<UUID, Double>): PhotoGroup {
         // Best photo first, so LayoutEngine puts it in the featured slot.

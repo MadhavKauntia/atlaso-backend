@@ -17,7 +17,8 @@ class PhotoSelector(
     private val qualityThresholds: QualityThresholds = QualityThresholds(),
     private val burstConfig: BurstConfig = BurstConfig(),
     private val scoringWeights: ScoringWeights = ScoringWeights(),
-    private val diversityConfig: DiversityConfig = DiversityConfig()
+    private val diversityConfig: DiversityConfig = DiversityConfig(),
+    private val coverageConfig: CoverageConfig = CoverageConfig()
 ) {
     private val logger = LoggerFactory.getLogger(PhotoSelector::class.java)
 
@@ -238,19 +239,37 @@ class PhotoSelector(
         weights: ScoringWeights,
         diversityConfig: DiversityConfig
     ): List<Photo> {
-        val selected = mutableListOf<Photo>()
+        val target = diversityConfig.targetPhotos
+
+        // Coverage guard: before any competition, reserve the strongest usable photo of
+        // every event so no activity is dropped just because it scored low. Only the
+        // remaining slots are then filled by the diversity-weighted competition below.
+        val reserved = if (coverageConfig.enabled) reserveCoveragePhotos(photos) else emptyList()
+        if (reserved.size >= target) {
+            logger.info("Coverage reservation ({}) meets/exceeds target ({}); keeping strongest per event", reserved.size, target)
+            return reserved.sortedByDescending { it.signals?.aestheticScore ?: 0.0 }.take(target)
+        }
+
+        val selected = reserved.toMutableList()
+        val reservedIds = reserved.mapNotNull { it.id }.toHashSet()
         val sceneTypeCounts = mutableMapOf<String?, Int>()
         val timeOfDayCounts = mutableMapOf<String?, Int>()
+        // Seed diversity counters with the reserved photos so quotas account for them.
+        reserved.forEach { p ->
+            sceneTypeCounts[p.signals?.sceneType] = (sceneTypeCounts[p.signals?.sceneType] ?: 0) + 1
+            timeOfDayCounts[p.signals?.timeOfDay] = (timeOfDayCounts[p.signals?.timeOfDay] ?: 0) + 1
+        }
+        logger.info("Coverage reserved {} photos across events before competition", reserved.size)
 
         // Calculate target counts per category
         val sceneTargets = diversityConfig.sceneTypeTargets.mapValues { (_, ratio) ->
-            (diversityConfig.targetPhotos * ratio).toInt()
+            (target * ratio).toInt()
         }
 
         logger.debug("Scene targets: $sceneTargets")
 
-        // Score all photos initially
-        var scoredPhotos = photos.map { photo ->
+        // Score the remaining (non-reserved) photos initially
+        var scoredPhotos = photos.filter { it.id !in reservedIds }.map { photo ->
             scorePhoto(photo, weights, sceneTypeCounts, timeOfDayCounts)
         }.sortedByDescending { it.totalScore }
 
@@ -292,6 +311,41 @@ class PhotoSelector(
         }
 
         return selected
+    }
+
+    /**
+     * Clusters photos into events (activities) and returns the single strongest usable
+     * photo from each — the coverage set. An event boundary is a large time gap or a
+     * location change, a lightweight proxy for the grouper's episode detection. This runs
+     * only on large trips (inside [selectPhotos]); smaller trips keep every photo anyway.
+     */
+    private fun reserveCoveragePhotos(photos: List<Photo>): List<Photo> {
+        if (photos.isEmpty()) return emptyList()
+        val sorted = photos.sortedWith(compareBy(nullsLast()) { it.metadata.takenAt })
+        val events = mutableListOf<MutableList<Photo>>()
+        var current = mutableListOf<Photo>()
+        for (photo in sorted) {
+            if (current.isEmpty() || !isNewEvent(current.last(), photo)) {
+                current.add(photo)
+            } else {
+                events.add(current)
+                current = mutableListOf(photo)
+            }
+        }
+        if (current.isNotEmpty()) events.add(current)
+        return events.mapNotNull { ev -> ev.maxByOrNull { it.signals?.aestheticScore ?: 0.0 } }
+    }
+
+    /** True when [b] begins a new event relative to [a]: a big time gap or a place change. */
+    private fun isNewEvent(a: Photo, b: Photo): Boolean {
+        val ta = a.metadata.takenAt
+        val tb = b.metadata.takenAt
+        val gapExceeded = ta != null && tb != null &&
+            Duration.between(ta, tb).toMinutes() >= coverageConfig.eventGapMinutes
+        val la = a.signals?.locationTag
+        val lb = b.signals?.locationTag
+        val locationChanged = la != null && lb != null && la != lb
+        return gapExceeded || locationChanged
     }
 
     /**
@@ -436,6 +490,16 @@ data class DiversityConfig(
         "golden_hour" to 0.25,
         "night" to 0.15
     )
+)
+
+/**
+ * Configuration for the coverage guard applied on large trips (>200 photos), where the
+ * diversity competition would otherwise be free to drop an entire low-scoring event.
+ */
+data class CoverageConfig(
+    val enabled: Boolean = true,
+    // Consecutive photos more than this many minutes apart start a new event.
+    val eventGapMinutes: Long = 60
 )
 
 /**
