@@ -76,6 +76,16 @@ data class Order(
     @Column(length = 32)
     val phone: String? = null,
 
+    @Column(name = "coupon_code", length = 64)
+    val couponCode: String? = null,
+
+    @Column(name = "razorpay_offer_id", length = 64)
+    val razorpayOfferId: String? = null,
+
+    /** Saving applied via the coupon (list amount - captured amount), in paise. */
+    @Column(name = "discount_minor")
+    val discountMinor: Long? = null,
+
     @Column(nullable = false, length = 32)
     var status: String = "PAID",
 

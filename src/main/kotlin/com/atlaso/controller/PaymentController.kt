@@ -4,10 +4,13 @@ import com.atlaso.controller.dto.CreateOrderRequest
 import com.atlaso.controller.dto.CreateOrderResponse
 import com.atlaso.controller.dto.VerifyPaymentRequest
 import com.atlaso.domain.trip.TripStatus
+import com.atlaso.service.CouponInvalidException
+import com.atlaso.service.CouponService
 import com.atlaso.service.OrderService
 import com.atlaso.service.ShippingInput
 import com.atlaso.service.PaymentService
 import com.atlaso.service.RazorpayAuthException
+import com.atlaso.service.RazorpayException
 import com.atlaso.service.TripService
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatus
@@ -26,6 +29,7 @@ class PaymentController(
     private val paymentService: PaymentService,
     private val tripService: TripService,
     private val orderService: OrderService,
+    private val couponService: CouponService,
 ) {
     private val logger = LoggerFactory.getLogger(PaymentController::class.java)
 
@@ -35,14 +39,32 @@ class PaymentController(
             return ResponseEntity.badRequest().body(mapOf("error" to "amount must be at least 100 paise"))
         }
         return try {
+            // Re-validate the coupon server-side and link its Razorpay offer to the order.
+            val coupon = request.couponCode
+                ?.takeIf { it.isNotBlank() }
+                ?.let { couponService.resolveForOrder(it, request.amount) }
+
             val order = paymentService.createOrder(
                 amountMinor = request.amount,
                 currency = request.currency ?: "INR",
                 receipt = request.receipt,
+                offerIds = coupon?.let { listOf(it.razorpayOfferId) },
+                forceOffer = coupon?.forceOffer ?: false,
             )
             ResponseEntity.ok(CreateOrderResponse(order.orderId, order.amount, order.currency))
+        } catch (ex: CouponInvalidException) {
+            ResponseEntity.badRequest().body(mapOf("error" to (ex.message ?: "Coupon is not valid")))
         } catch (ex: RazorpayAuthException) {
             ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(mapOf("error" to "Razorpay authentication failed"))
+        } catch (ex: RazorpayException) {
+            // Most often the linked offer is ineligible (min amount, expiry, method).
+            if (!request.couponCode.isNullOrBlank()) {
+                logger.warn("Razorpay rejected order with coupon {}: {}", request.couponCode, ex.message)
+                ResponseEntity.badRequest().body(mapOf("error" to "This coupon can't be applied to your order"))
+            } else {
+                logger.error("Failed to create Razorpay order", ex)
+                ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(mapOf("error" to "Failed to create order"))
+            }
         } catch (ex: Exception) {
             logger.error("Failed to create Razorpay order", ex)
             ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(mapOf("error" to "Failed to create order"))
@@ -86,7 +108,7 @@ class PaymentController(
                     country = request.country,
                     phone = request.phone,
                 )
-                orderService.createPaidOrder(tripId, userId, orderId, paymentId, request.quantity, shipping)
+                orderService.createPaidOrder(tripId, userId, orderId, paymentId, request.quantity, shipping, request.couponCode)
             } catch (ex: Exception) {
                 logger.error("Failed to record order for trip {}", tripId, ex)
             }

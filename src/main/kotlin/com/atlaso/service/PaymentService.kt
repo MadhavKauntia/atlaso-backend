@@ -72,15 +72,27 @@ class PaymentService(
      * Creates a Razorpay order. [amountMinor] is in the smallest currency unit
      * (paise for INR) and must be at least 100.
      */
-    fun createOrder(amountMinor: Long, currency: String, receipt: String?): RazorpayOrder {
+    fun createOrder(
+        amountMinor: Long,
+        currency: String,
+        receipt: String?,
+        offerIds: List<String>? = null,
+        forceOffer: Boolean = false,
+    ): RazorpayOrder {
         require(amountMinor >= 100) { "amount must be at least 100 (minor units)" }
 
+        // Always send the FULL amount — Razorpay subtracts any linked offer's discount.
         val payload = objectMapper.writeValueAsString(
-            mapOf(
-                "amount" to amountMinor,
-                "currency" to currency,
-                "receipt" to (receipt ?: "rcpt_${System.currentTimeMillis()}"),
-            )
+            buildMap<String, Any> {
+                put("amount", amountMinor)
+                put("currency", currency)
+                put("receipt", receipt ?: "rcpt_${System.currentTimeMillis()}")
+                if (!offerIds.isNullOrEmpty()) {
+                    put("offers", offerIds)
+                    // force_offer requires exactly one offer id in the array.
+                    if (forceOffer && offerIds.size == 1) put("force_offer", true)
+                }
+            }
         )
 
         val request = Request.Builder()

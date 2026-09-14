@@ -8,7 +8,7 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.util.UUID
 
-private const val UNIT_PRICE_MINOR = 199900L // Rs. 1999 in paise
+private const val UNIT_PRICE_MINOR = Pricing.UNIT_PRICE_MINOR // Rs. 1999 in paise
 
 /** Shipping details captured at checkout (recipient name/email come from the account). */
 data class ShippingInput(
@@ -28,6 +28,7 @@ class OrderService(
     private val tripService: TripService,
     private val bookGenerationService: BookGenerationService,
     private val paymentService: PaymentService,
+    private val couponService: CouponService,
     private val receiptRenderer: ReceiptRenderer,
     private val emailService: EmailService,
 ) {
@@ -45,6 +46,7 @@ class OrderService(
         razorpayPaymentId: String?,
         quantity: Int?,
         shipping: ShippingInput? = null,
+        couponCode: String? = null,
     ): Order {
         razorpayPaymentId?.let { pid ->
             orderRepository.findByRazorpayPaymentId(pid)?.let { return it }
@@ -55,7 +57,11 @@ class OrderService(
         val payment = razorpayPaymentId?.let { paymentService.fetchPayment(it) }
 
         val qty = (quantity ?: 1).coerceAtLeast(1)
-        val amountMinor = payment?.amountMinor ?: (qty * UNIT_PRICE_MINOR)
+        val listMinor = qty * UNIT_PRICE_MINOR
+        // Razorpay applies the offer discount, so the captured amount is authoritative.
+        val amountMinor = payment?.amountMinor ?: listMinor
+        val coupon = couponCode?.takeIf { it.isNotBlank() }?.let { couponService.findByCode(it) }
+        val discountMinor = coupon?.let { (listMinor - amountMinor).takeIf { d -> d > 0 } }
         val book = runCatching { bookGenerationService.getLatestBookByTripId(tripId, userId) }.getOrNull()
 
         val order = Order(
@@ -78,10 +84,16 @@ class OrderService(
             pincode = shipping?.pincode?.ifBlank { null },
             shipCountry = shipping?.country?.ifBlank { null },
             phone = shipping?.phone?.ifBlank { null },
+            couponCode = coupon?.code,
+            razorpayOfferId = coupon?.razorpayOfferId,
+            discountMinor = discountMinor,
             status = "PAID",
         )
         val saved = orderRepository.save(order)
         logger.info("Recorded order ATL-{} for trip {}", saved.number, tripId)
+
+        // Count the redemption against the coupon's usage cap — best-effort.
+        coupon?.let { runCatching { couponService.recordRedemption(it) } }
 
         // Best-effort order confirmation email with the receipt attached.
         runCatching {

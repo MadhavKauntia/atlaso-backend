@@ -6,6 +6,8 @@ data class CreateOrderRequest(
     val amount: Long,
     val currency: String? = null,
     val receipt: String? = null,
+    // When present, the coupon's Razorpay offer is linked to the order.
+    val couponCode: String? = null,
 )
 
 data class CreateOrderResponse(
@@ -21,6 +23,7 @@ data class VerifyPaymentRequest(
     // Optional — when present, the trip is marked ORDERED after a valid signature.
     val tripId: UUID? = null,
     val quantity: Int? = null,
+    val couponCode: String? = null,
     // Shipping details captured at checkout (name/email come from the account).
     val addressLine1: String? = null,
     val addressLine2: String? = null,
