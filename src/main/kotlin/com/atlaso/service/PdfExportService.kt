@@ -27,6 +27,11 @@ class PdfExportService(
 ) {
     private val logger = LoggerFactory.getLogger(PdfExportService::class.java)
 
+    private companion object {
+        const val IMAGE_LOAD_ATTEMPTS = 3
+        const val IMAGE_LOAD_BACKOFF_MS = 200L
+    }
+
     fun exportBook(bookId: UUID, userId: UUID, coverPng: ByteArray? = null, backPng: ByteArray? = null): Book {
         val book = bookGenerationService.getBookForUser(bookId, userId)
 
@@ -49,11 +54,15 @@ class PdfExportService(
                         logger.warn("Failed to find photo {} for slot", slot.photoId, e)
                         null
                     }
-                    val imageBytes = try {
-                        if (photo != null) storageService.load(photo.storageKey) else null
-                    } catch (e: Exception) {
-                        logger.warn("Failed to load photo {} for slot", slot.photoId, e)
-                        null
+                    // Retry transient S3 read failures before giving up — a single blip must
+                    // not silently blank a slot in a book bound for print.
+                    val imageBytes = if (photo == null) null else retryOrNull(
+                        attempts = IMAGE_LOAD_ATTEMPTS,
+                        backoffMs = IMAGE_LOAD_BACKOFF_MS,
+                        onError = { attempt, e -> logger.warn("Load attempt {}/{} failed for photo {}", attempt, IMAGE_LOAD_ATTEMPTS, slot.photoId, e) }
+                    ) { storageService.load(photo.storageKey) }
+                    if (photo != null && imageBytes == null) {
+                        logger.error("Could not load photo {} after {} attempts; slot will render as a placeholder", slot.photoId, IMAGE_LOAD_ATTEMPTS)
                     }
                     SlotRenderData(
                         x = slot.position.x,

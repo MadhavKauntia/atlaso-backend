@@ -49,6 +49,8 @@ class PdfRenderer {
         private const val TITLE_FONT_SIZE = 32f
         private const val SUBTITLE_FONT_SIZE = 18f
         private const val MAX_IMAGE_DIMENSION = 1800  // ~260 DPI at this trim, sufficient for print
+        private const val DECODE_ATTEMPTS = 2
+        private const val DECODE_BACKOFF_MS = 100L
     }
 
     fun renderCover(title: String, subtitle: String?): ByteArray {
@@ -154,11 +156,17 @@ class PdfRenderer {
         val slotY = PAGE_HEIGHT - (slot.y * PAGE_HEIGHT).toFloat() - slotH
 
         if (slot.imageBytes != null) {
-            try {
-                val image = loadImage(document, slot.imageBytes, slot.rotation)
+            // Retry a transient decode failure (e.g. a low-memory ImageIO hiccup) before
+            // falling back to a placeholder, so a blip doesn't blank the slot in print.
+            val image = retryOrNull(
+                attempts = DECODE_ATTEMPTS,
+                backoffMs = DECODE_BACKOFF_MS,
+                onError = { attempt, e -> logger.warn("Decode attempt {}/{} failed for slot, retrying", attempt, DECODE_ATTEMPTS, e) }
+            ) { loadImage(document, slot.imageBytes, slot.rotation) }
+            if (image != null) {
                 drawCoverFitImage(cs, image, slotX, slotY, slotW, slotH, slot.offsetX.toFloat(), slot.offsetY.toFloat())
-            } catch (e: Exception) {
-                logger.warn("Failed to render photo in slot, using placeholder", e)
+            } else {
+                logger.error("Failed to decode slot image after {} attempts; using placeholder", DECODE_ATTEMPTS)
                 drawPlaceholder(cs, slotX, slotY, slotW, slotH)
             }
         } else {
