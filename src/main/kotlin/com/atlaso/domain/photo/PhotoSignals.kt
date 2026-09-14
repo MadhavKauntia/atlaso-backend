@@ -14,5 +14,12 @@ data class PhotoSignals(
     val colorTemperature: String = "neutral",
     val mood: String = "serene",
     val depthOfField: String = "deep",
-    val locationTag: String? = null
+    val locationTag: String? = null,
+    // Observable composition properties (V2), used for layout decisions.
+    val subjectType: String = "other",
+    val shotDistance: String = "medium",
+    val subjectProminence: String = "medium",
+    val settingScope: String = "subject",
+    val backgroundComplexity: String = "medium",
+    val negativeSpace: String = "low"
 ) : Serializable

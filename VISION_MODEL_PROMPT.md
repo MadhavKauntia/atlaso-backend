@@ -18,7 +18,13 @@ Analyze the image and return ONLY this exact JSON structure:
   "color_temperature": <one of: "warm", "cool", "neutral">,
   "mood": <one of: "joyful", "serene", "dramatic", "adventurous">,
   "depth_of_field": <one of: "shallow", "deep">,
-  "location_tag": <one of: "beach", "mountain", "forest", "lake", "waterfall", "desert", "park", "restaurant", "cafe", "market", "hotel", "airport", "city_street", "historical_site", "museum", "temple", "viewpoint", "indoor_venue", "boat", "other">
+  "location_tag": <one of: "beach", "mountain", "forest", "lake", "waterfall", "desert", "park", "restaurant", "cafe", "market", "hotel", "airport", "city_street", "historical_site", "museum", "temple", "viewpoint", "indoor_venue", "boat", "other">,
+  "subject_type": <one of: "person", "couple", "group", "landscape", "food", "object", "architecture", "activity", "other">,
+  "shot_distance": <one of: "closeup", "medium", "wide">,
+  "subject_prominence": <one of: "low", "medium", "high">,
+  "setting_scope": <one of: "detail", "subject", "environment">,
+  "background_complexity": <one of: "low", "medium", "high">,
+  "negative_space": <one of: "low", "medium", "high">
 }
 
 Rules:
@@ -33,7 +39,14 @@ Rules:
 - mood: emotional tone of the image
 - depth_of_field: shallow = blurred background with isolated subject; deep = everything in focus
 - location_tag: the type of place or setting depicted; choose the single best match
+- subject_type: the main subject category of the photo
+- shot_distance: closeup = tight on subject; medium = subject with surroundings; wide = expansive / distant
+- subject_prominence: how dominant the main subject is in the frame
+- setting_scope: detail = small detail; subject = subject in context; environment = the whole place/scene
+- background_complexity: how busy/cluttered the background is
+- negative_space: amount of clean empty space around the subject
 
+Describe only observable properties. Do not judge story importance or recommend layouts.
 Return ONLY the JSON. No markdown. No explanations. No code blocks.
 ```
 

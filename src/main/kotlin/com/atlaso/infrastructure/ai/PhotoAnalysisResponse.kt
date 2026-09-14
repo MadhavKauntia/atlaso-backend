@@ -38,7 +38,26 @@ data class PhotoAnalysisResponse(
     val depthOfField: String = "deep",
 
     @JsonProperty("location_tag")
-    val locationTag: String? = null
+    val locationTag: String? = null,
+
+    // Observable composition properties used for layout decisions (V2).
+    @JsonProperty("subject_type")
+    val subjectType: String = "other",        // person | couple | group | landscape | food | object | architecture | activity | other
+
+    @JsonProperty("shot_distance")
+    val shotDistance: String = "medium",      // closeup | medium | wide
+
+    @JsonProperty("subject_prominence")
+    val subjectProminence: String = "medium", // low | medium | high
+
+    @JsonProperty("setting_scope")
+    val settingScope: String = "subject",     // detail | subject | environment
+
+    @JsonProperty("background_complexity")
+    val backgroundComplexity: String = "medium", // low | medium | high
+
+    @JsonProperty("negative_space")
+    val negativeSpace: String = "low"         // low | medium | high
 ) {
     init {
         require(aestheticScore in 0.0..1.0) { "aesthetic_score must be between 0.0 and 1.0" }

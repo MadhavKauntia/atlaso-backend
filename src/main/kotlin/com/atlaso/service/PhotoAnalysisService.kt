@@ -114,7 +114,13 @@ class PhotoAnalysisService(
             colorTemperature = response.colorTemperature,
             mood = response.mood,
             depthOfField = response.depthOfField,
-            locationTag = response.locationTag
+            locationTag = response.locationTag,
+            subjectType = response.subjectType,
+            shotDistance = response.shotDistance,
+            subjectProminence = response.subjectProminence,
+            settingScope = response.settingScope,
+            backgroundComplexity = response.backgroundComplexity,
+            negativeSpace = response.negativeSpace
         )
     }
 }

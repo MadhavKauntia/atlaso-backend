@@ -121,16 +121,58 @@ class PhotoSelector(
     private fun dedupeBursts(photos: List<Photo>, config: BurstConfig): List<Photo> {
         val bursts = detectBursts(photos, config)
 
-        logger.debug("Detected ${bursts.size} bursts")
-        bursts.forEach { burst ->
-            logger.debug("Burst: ${burst.photos.size} photos from ${burst.startTime} to ${burst.endTime}")
-        }
+        logger.debug("Detected ${bursts.size} time-bursts")
 
         val burstPhotoIds = bursts.flatMap { it.photos.map { p -> p.id } }.toSet()
-        val bestFromBursts = bursts.map { it.getBestPhoto() }
         val nonBurstPhotos = photos.filter { it.id !in burstPhotoIds }
+        // Only collapse frames within a burst that are ALSO semantically similar, so
+        // e.g. a wide beach shot and a close couple portrait taken seconds apart both
+        // survive, while three near-identical selfies collapse to the best one.
+        val keptFromBursts = bursts.flatMap { keepSemanticallyDistinct(it.photos) }
 
-        return nonBurstPhotos + bestFromBursts
+        return nonBurstPhotos + keptFromBursts
+    }
+
+    /** Within a time-burst, keep the best frame of each run of semantically-similar shots. */
+    private fun keepSemanticallyDistinct(burstPhotos: List<Photo>): List<Photo> {
+        val sorted = burstPhotos.sortedBy { it.metadata.takenAt }
+        val kept = mutableListOf<Photo>()
+        var cluster = mutableListOf<Photo>()
+        fun flush() {
+            if (cluster.isEmpty()) return
+            kept.add(cluster.maxByOrNull { it.signals?.aestheticScore ?: 0.0 } ?: cluster.first())
+            cluster = mutableListOf()
+        }
+        for (photo in sorted) {
+            // Compare against the cluster's anchor so a drifting sequence splits.
+            if (cluster.isEmpty() || isSemanticallySimilar(cluster.first(), photo)) {
+                cluster.add(photo)
+            } else {
+                flush()
+                cluster.add(photo)
+            }
+        }
+        flush()
+        return kept
+    }
+
+    private fun isSemanticallySimilar(a: Photo, b: Photo): Boolean {
+        val sa = a.signals ?: return false
+        val sb = b.signals ?: return false
+        val sameLocation = sa.locationTag == sb.locationTag || sa.locationTag == null || sb.locationTag == null
+        return sa.subjectType == sb.subjectType &&
+            sa.shotDistance == sb.shotDistance &&
+            sa.facesCount == sb.facesCount &&
+            sameLocation &&
+            objectJaccard(sa.detectedObjects, sb.detectedObjects) >= 0.4
+    }
+
+    private fun objectJaccard(a: List<String>, b: List<String>): Double {
+        if (a.isEmpty() || b.isEmpty()) return 0.0
+        val sa = a.toSet()
+        val sb = b.toSet()
+        val union = sa.union(sb).size.toDouble()
+        return if (union == 0.0) 0.0 else sa.intersect(sb).size / union
     }
 
     /**
