@@ -68,7 +68,15 @@ class BookGenerationService(
 
     fun regenerateBook(bookId: UUID, userId: UUID): Book {
         val existingBook = getBookForUser(bookId, userId)
-        return generateBook(existingBook.trip.id!!, userId)
+        val newBook = generateBook(existingBook.trip.id!!, userId)
+        // Regenerate only reworks the layout — carry the cover config forward so the
+        // user's chosen cover/title/subtitle isn't reset on the new version.
+        newBook.title = existingBook.title
+        newBook.subtitle = existingBook.subtitle
+        newBook.coverCountry = existingBook.coverCountry
+        newBook.coverTemplateId = existingBook.coverTemplateId
+        newBook.coverPaletteId = existingBook.coverPaletteId
+        return bookRepository.save(newBook)
     }
 
     @Transactional(readOnly = true)
