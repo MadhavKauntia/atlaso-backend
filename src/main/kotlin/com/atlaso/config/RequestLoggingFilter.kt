@@ -33,7 +33,7 @@ class RequestLoggingFilter : OncePerRequestFilter() {
         }
     }
 
-    // Skip CORS preflight noise.
+    // Skip CORS preflight noise and health-check pings.
     override fun shouldNotFilter(request: HttpServletRequest): Boolean =
-        request.method.equals("OPTIONS", ignoreCase = true)
+        request.method.equals("OPTIONS", ignoreCase = true) || request.requestURI == "/health"
 }

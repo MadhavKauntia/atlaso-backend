@@ -10,6 +10,16 @@ spring:
     username: "${PGUSER:postgres}"
     password: "${PGPASSWORD:postgres}"
     driver-class-name: org.postgresql.Driver
+    hikari:
+      # Explicit pool sizing (default was 10). Raise via DB_POOL_SIZE if Postgres max_connections
+      # allows. Note: book generation still holds a connection across OpenAI I/O (see
+      # PHOTOBOOK_TX_REFACTOR_PLAN.md) — this widens the pool but the real fix is that refactor.
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      minimum-idle: 2
+      # Fail fast when the pool is saturated instead of hanging indefinitely.
+      connection-timeout: 20000   # 20s to acquire a connection
+      max-lifetime: 1800000       # 30m — recycle before Postgres/proxy idle cutoffs
+      keepalive-time: 300000      # 5m keepalive probe
 
   jpa:
     hibernate:

@@ -35,6 +35,7 @@ class SecurityConfig(
             .cors { it.configurationSource(corsConfigurationSource()) }
             .authorizeHttpRequests { auth ->
                 auth
+                    .requestMatchers(HttpMethod.GET, "/health").permitAll()
                     .requestMatchers(HttpMethod.POST, "/api/auth/google").permitAll()
                     .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                     // Guest trip flow — no auth required until claim
