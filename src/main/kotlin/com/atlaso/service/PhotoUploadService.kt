@@ -124,7 +124,8 @@ class PhotoUploadService(
         return saved
     }
 
-    fun initiateUploads(tripId: UUID, requests: List<InitiateUploadRequest>): List<InitiateUploadResponse> {
+    fun initiateUploads(tripId: UUID, requests: List<InitiateUploadRequest>, guestToken: String? = null): List<InitiateUploadResponse> {
+        tripService.assertGuestAccess(tripId, guestToken) // guest capability required for uploads
         tripService.getTrip(tripId) // verify trip exists
         val existing = photoRepository.countByTripId(tripId)
         if (existing + requests.size > MAX_PHOTOS_PER_TRIP) {
@@ -166,13 +167,26 @@ class PhotoUploadService(
         }
     }
 
-    fun confirmUploads(tripId: UUID, confirmations: List<ConfirmUploadRequest>): List<Photo> {
+    fun confirmUploads(tripId: UUID, confirmations: List<ConfirmUploadRequest>, guestToken: String? = null): List<Photo> {
+        tripService.assertGuestAccess(tripId, guestToken) // guest capability required for uploads
         val trip = tripService.getTrip(tripId)
         val existing = photoRepository.countByTripId(tripId)
         if (existing + confirmations.size > MAX_PHOTOS_PER_TRIP) {
             throw IllegalArgumentException("A book can hold at most $MAX_PHOTOS_PER_TRIP photos.")
         }
+        val prefix = "$tripId/"
         val photos = confirmations.map { conf ->
+            // Keys must belong to THIS trip's prefix — a client can't confirm another trip's
+            // object (or an arbitrary path) into this trip.
+            require(conf.storageKey.startsWith(prefix) && !conf.storageKey.contains("..")) {
+                "Storage key does not belong to this trip"
+            }
+            conf.thumbnailStorageKey?.let {
+                require(it.startsWith(prefix) && !it.contains("..")) { "Thumbnail key does not belong to this trip" }
+            }
+            require(conf.contentType in ALLOWED_CONTENT_TYPES) { "Unsupported file type: ${conf.contentType}" }
+            require(conf.fileSize in 1..MAX_FILE_SIZE_BYTES) { "Invalid file size" }
+
             val takenAt = conf.takenAt?.let { Instant.ofEpochMilli(it) }
             Photo(
                 trip = trip,
@@ -267,7 +281,8 @@ class PhotoUploadService(
             val rawGeo = gps?.geoLocation
             if (rawGeo != null) {
                 location = GeoLocation(rawGeo.latitude, rawGeo.longitude)
-                logger.info("Extracted GPS: {}, {}", rawGeo.latitude, rawGeo.longitude)
+                // Don't log exact coordinates — that's user PII flowing to centralized logs.
+                logger.debug("Extracted GPS location for photo")
             }
         } catch (e: Exception) {
             logger.warn("Failed to extract EXIF data: {}", e.message)

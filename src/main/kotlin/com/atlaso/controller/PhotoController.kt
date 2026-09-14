@@ -106,19 +106,21 @@ class PhotoController(
     @PostMapping("/initiate")
     fun initiateUploads(
         @PathVariable tripId: UUID,
-        @RequestBody requests: List<InitiateUploadRequest>
+        @RequestBody requests: List<InitiateUploadRequest>,
+        @RequestHeader(value = "X-Guest-Token", required = false) guestToken: String?
     ): ResponseEntity<List<InitiateUploadResponse>> {
-        val responses = photoUploadService.initiateUploads(tripId, requests)
+        val responses = photoUploadService.initiateUploads(tripId, requests, guestToken)
         return ResponseEntity.ok(responses)
     }
 
-    // Public — guest uploads before login
+    // Public — guest uploads before login (requires the trip's guest token)
     @PostMapping("/confirm")
     fun confirmUploads(
         @PathVariable tripId: UUID,
-        @RequestBody confirmations: List<ConfirmUploadRequest>
+        @RequestBody confirmations: List<ConfirmUploadRequest>,
+        @RequestHeader(value = "X-Guest-Token", required = false) guestToken: String?
     ): ResponseEntity<List<PhotoResponse>> {
-        val photos = photoUploadService.confirmUploads(tripId, confirmations)
+        val photos = photoUploadService.confirmUploads(tripId, confirmations, guestToken)
         return ResponseEntity.status(HttpStatus.CREATED).body(photos.map { toResponse(it) })
     }
 

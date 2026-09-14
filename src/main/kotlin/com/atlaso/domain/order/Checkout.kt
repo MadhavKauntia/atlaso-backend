@@ -1,0 +1,52 @@
+package com.atlaso.domain.order
+
+import jakarta.persistence.Column
+import jakarta.persistence.Entity
+import jakarta.persistence.GeneratedValue
+import jakarta.persistence.GenerationType
+import jakarta.persistence.Id
+import jakarta.persistence.Table
+import java.time.Instant
+import java.util.UUID
+
+/**
+ * Server-side binding created when a Razorpay order is created. It records the trip, user,
+ * quantity, and the amount we expect to be captured — none of which the client can tamper
+ * with at verify time. Payment verification looks this up by razorpay_order_id and trusts
+ * these values instead of anything the client re-sends.
+ */
+@Entity
+@Table(name = "checkouts")
+data class Checkout(
+    @Id
+    @GeneratedValue(strategy = GenerationType.UUID)
+    val id: UUID? = null,
+
+    @Column(name = "razorpay_order_id", nullable = false, unique = true, length = 64)
+    val razorpayOrderId: String,
+
+    @Column(name = "trip_id", nullable = false)
+    val tripId: UUID,
+
+    @Column(name = "user_id", nullable = false)
+    val userId: UUID,
+
+    @Column(nullable = false)
+    val quantity: Int,
+
+    /** Amount (paise) we expect Razorpay to capture (list price minus any coupon offer). */
+    @Column(name = "amount_minor", nullable = false)
+    val amountMinor: Long,
+
+    @Column(nullable = false, length = 8)
+    val currency: String = "INR",
+
+    @Column(name = "coupon_code", length = 64)
+    val couponCode: String? = null,
+
+    @Column(nullable = false, length = 16)
+    var status: String = "PENDING", // PENDING | COMPLETED
+
+    @Column(name = "created_at", nullable = false, updatable = false)
+    val createdAt: Instant = Instant.now(),
+)

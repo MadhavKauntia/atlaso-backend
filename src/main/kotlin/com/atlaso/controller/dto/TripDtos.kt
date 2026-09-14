@@ -21,7 +21,10 @@ data class TripResponse(
     val endDate: LocalDate?,
     val status: TripStatus,
     val createdAt: Instant?,
-    val updatedAt: Instant?
+    val updatedAt: Instant?,
+    // Only present in the create-trip response — the client keeps it and sends it as the
+    // X-Guest-Token header for subsequent guest operations (upload/claim). Never re-served.
+    val guestToken: String? = null
 ) {
     companion object {
         fun from(trip: Trip): TripResponse = TripResponse(
@@ -34,5 +37,7 @@ data class TripResponse(
             createdAt = trip.createdAt,
             updatedAt = trip.updatedAt
         )
+
+        fun from(trip: Trip, guestToken: String?): TripResponse = from(trip).copy(guestToken = guestToken)
     }
 }

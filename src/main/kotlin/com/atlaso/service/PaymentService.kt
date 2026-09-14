@@ -36,6 +36,9 @@ class PaymentService(
         val amountMinor: Long?,
         val email: String?,
         val contact: String?,
+        val status: String?,   // "captured" for a completed payment
+        val orderId: String?,  // the razorpay order this payment settled
+        val currency: String?,
     )
 
     /**
@@ -60,6 +63,9 @@ class PaymentService(
                     amountMinor = n.get("amount")?.asLong(),
                     email = n.get("email")?.asText()?.takeIf { it.isNotBlank() && it != "null" },
                     contact = n.get("contact")?.asText()?.takeIf { it.isNotBlank() && it != "null" },
+                    status = n.get("status")?.asText()?.takeIf { it.isNotBlank() },
+                    orderId = n.get("order_id")?.asText()?.takeIf { it.isNotBlank() && it != "null" },
+                    currency = n.get("currency")?.asText()?.takeIf { it.isNotBlank() },
                 )
             }
         } catch (ex: Exception) {

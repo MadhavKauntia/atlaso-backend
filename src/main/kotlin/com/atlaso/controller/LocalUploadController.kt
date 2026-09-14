@@ -14,7 +14,9 @@ import org.springframework.web.bind.annotation.RestController
 
 @RestController
 @RequestMapping("/api/internal")
-@ConditionalOnProperty(name = ["atlaso.storage.type"], havingValue = "local", matchIfMissing = true)
+// Dev-only. Must be explicitly enabled (STORAGE_TYPE=local); NOT enabled when the setting is
+// missing, so a misconfigured production never exposes these public read/write endpoints.
+@ConditionalOnProperty(name = ["atlaso.storage.type"], havingValue = "local", matchIfMissing = false)
 class LocalUploadController(
     private val storageService: StorageService
 ) {

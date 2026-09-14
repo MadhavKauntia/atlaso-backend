@@ -3,10 +3,12 @@ package com.atlaso.controller
 import com.atlaso.controller.dto.CreateOrderRequest
 import com.atlaso.controller.dto.CreateOrderResponse
 import com.atlaso.controller.dto.VerifyPaymentRequest
-import com.atlaso.domain.trip.TripStatus
-import com.atlaso.service.CouponInvalidException
+import com.atlaso.domain.order.Checkout
+import com.atlaso.repository.CheckoutRepository
 import com.atlaso.service.CouponService
 import com.atlaso.service.OrderService
+import com.atlaso.service.PaymentVerificationException
+import com.atlaso.service.Pricing
 import com.atlaso.service.ShippingInput
 import com.atlaso.service.PaymentService
 import com.atlaso.service.RazorpayAuthException
@@ -30,34 +32,59 @@ class PaymentController(
     private val tripService: TripService,
     private val orderService: OrderService,
     private val couponService: CouponService,
+    private val checkoutRepository: CheckoutRepository,
 ) {
     private val logger = LoggerFactory.getLogger(PaymentController::class.java)
 
+    private companion object {
+        const val MAX_QUANTITY = 20
+    }
+
     @PostMapping("/create-order")
-    fun createOrder(@RequestBody request: CreateOrderRequest): ResponseEntity<Any> {
-        if (request.amount < 100) {
-            return ResponseEntity.badRequest().body(mapOf("error" to "amount must be at least 100 paise"))
-        }
+    fun createOrder(
+        @RequestBody request: CreateOrderRequest,
+        @AuthenticationPrincipal jwt: Jwt,
+    ): ResponseEntity<Any> {
+        val userId = UUID.fromString(jwt.subject)
+        // Ownership — you can only pay for your own trip (throws → 404 if not).
+        tripService.getTrip(request.tripId, userId)
+
+        val quantity = (request.quantity ?: 1).coerceIn(1, MAX_QUANTITY)
+        // Price is computed here, server-side — the client cannot choose the amount.
+        val listMinor = quantity * Pricing.UNIT_PRICE_MINOR
+
         return try {
-            // Re-validate the coupon server-side and link its Razorpay offer to the order.
-            val coupon = request.couponCode
-                ?.takeIf { it.isNotBlank() }
-                ?.let { couponService.resolveForOrder(it, request.amount) }
+            // Server-side coupon validation + the amount we expect Razorpay to capture.
+            val validation = request.couponCode?.takeIf { it.isNotBlank() }
+                ?.let { couponService.validate(it, listMinor) }
+            if (validation != null && !validation.valid) {
+                return ResponseEntity.badRequest().body(mapOf("error" to (validation.message ?: "Coupon is not valid")))
+            }
+            val expectedCaptured = validation?.finalMinor ?: listMinor
 
             val order = paymentService.createOrder(
-                amountMinor = request.amount,
-                currency = request.currency ?: "INR",
+                amountMinor = listMinor,
+                currency = "INR",
                 receipt = request.receipt,
-                offerIds = coupon?.let { listOf(it.razorpayOfferId) },
-                forceOffer = coupon?.forceOffer ?: false,
+                offerIds = validation?.offerId?.let { listOf(it) },
+                forceOffer = validation?.forceOffer ?: false,
+            )
+            // Bind the order to this trip/user/qty/expected-amount so verify can't be tampered with.
+            checkoutRepository.save(
+                Checkout(
+                    razorpayOrderId = order.orderId,
+                    tripId = request.tripId,
+                    userId = userId,
+                    quantity = quantity,
+                    amountMinor = expectedCaptured,
+                    currency = "INR",
+                    couponCode = request.couponCode?.takeIf { it.isNotBlank() },
+                )
             )
             ResponseEntity.ok(CreateOrderResponse(order.orderId, order.amount, order.currency))
-        } catch (ex: CouponInvalidException) {
-            ResponseEntity.badRequest().body(mapOf("error" to (ex.message ?: "Coupon is not valid")))
         } catch (ex: RazorpayAuthException) {
             ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(mapOf("error" to "Razorpay authentication failed"))
         } catch (ex: RazorpayException) {
-            // Most often the linked offer is ineligible (min amount, expiry, method).
             if (!request.couponCode.isNullOrBlank()) {
                 logger.warn("Razorpay rejected order with coupon {}: {}", request.couponCode, ex.message)
                 ResponseEntity.badRequest().body(mapOf("error" to "This coupon can't be applied to your order"))
@@ -83,37 +110,39 @@ class PaymentController(
             return ResponseEntity.badRequest().body(mapOf("error" to "Missing required fields"))
         }
 
-        val valid = paymentService.verifySignature(orderId, paymentId, signature)
-        if (!valid) {
+        if (!paymentService.verifySignature(orderId, paymentId, signature)) {
             logger.warn("Razorpay signature mismatch for order {}", orderId)
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(mapOf("verified" to false, "error" to "Signature verification failed"))
         }
 
-        // Signature is valid — mark the trip ordered (validating ownership first)
-        // and record the order for the receipt.
-        request.tripId?.let { tripId ->
-            val userId = UUID.fromString(jwt.subject)
-            tripService.getTrip(tripId, userId) // throws if not owned by this user
-            tripService.updateStatus(tripId, TripStatus.ORDERED)
-            // Best-effort — the payment already succeeded, so a recording failure
-            // must not surface as a failed verification.
-            try {
-                val shipping = ShippingInput(
-                    addressLine1 = request.addressLine1,
-                    addressLine2 = request.addressLine2,
-                    city = request.city,
-                    state = request.state,
-                    pincode = request.pincode,
-                    country = request.country,
-                    phone = request.phone,
-                )
-                orderService.createPaidOrder(tripId, userId, orderId, paymentId, request.quantity, shipping, request.couponCode)
-            } catch (ex: Exception) {
-                logger.error("Failed to record order for trip {}", tripId, ex)
-            }
+        val userId = UUID.fromString(jwt.subject)
+        // Trust the server-side binding, NOT client-supplied trip/quantity/amount.
+        val checkout = checkoutRepository.findByRazorpayOrderId(orderId)
+            ?: return ResponseEntity.badRequest().body(mapOf("verified" to false, "error" to "Unknown or expired checkout"))
+        if (checkout.userId != userId) {
+            logger.warn("Checkout ownership mismatch for order {} (user {})", orderId, userId)
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(mapOf("verified" to false, "error" to "Not your checkout"))
         }
 
-        return ResponseEntity.ok(mapOf("verified" to true))
+        val shipping = ShippingInput(
+            addressLine1 = request.addressLine1,
+            addressLine2 = request.addressLine2,
+            city = request.city,
+            state = request.state,
+            pincode = request.pincode,
+            country = request.country,
+            phone = request.phone,
+        )
+        return try {
+            // Re-verifies the captured payment (status/amount/order) and records the order,
+            // flips the trip to ORDERED, and closes the checkout — all in one transaction.
+            orderService.recordPaidOrder(checkout, paymentId, shipping)
+            ResponseEntity.ok(mapOf("verified" to true))
+        } catch (ex: PaymentVerificationException) {
+            logger.warn("Payment verification failed for order {}: {}", orderId, ex.message)
+            ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(mapOf("verified" to false, "error" to (ex.message ?: "Payment could not be verified")))
+        }
     }
 }

@@ -10,11 +10,14 @@ RUN ./gradlew bootJar --no-daemon
 FROM eclipse-temurin:21-jre
 RUN apt-get update && apt-get install -y imagemagick libheif-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
+# Run as a non-root user to limit blast radius of any RCE/file-write bug.
+RUN useradd --system --uid 10001 --home /app atlaso
 
 # OpenTelemetry Java agent — ships Logback logs to Axiom over OTLP so logs are persisted
 # and searchable (Railway's own log buffer is short-lived). Pinned for reproducibility.
-ADD https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/download/v2.31.1/opentelemetry-javaagent.jar /app/otel-agent.jar
-COPY --from=build /app/build/libs/*.jar app.jar
+ADD --chown=atlaso:atlaso https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/download/v2.31.1/opentelemetry-javaagent.jar /app/otel-agent.jar
+COPY --from=build --chown=atlaso:atlaso /app/build/libs/*.jar app.jar
+USER atlaso
 
 # Logs-only, lean: disable all auto-instrumentation except the Logback→OTLP bridge, and
 # turn off trace/metric export. Non-secret defaults live here; the Axiom credentials come
