@@ -7,9 +7,9 @@ WORKDIR /app
 # supports RUN --mount=type=cache — so even a build-file change stays fast.
 COPY gradlew settings.gradle.kts build.gradle.kts ./
 COPY gradle gradle
-RUN --mount=type=cache,target=/root/.gradle ./gradlew dependencies --no-daemon || true
+RUN --mount=type=cache,id=gradle,target=/root/.gradle ./gradlew dependencies --no-daemon || true
 COPY src src
-RUN --mount=type=cache,target=/root/.gradle ./gradlew bootJar --no-daemon
+RUN --mount=type=cache,id=gradle,target=/root/.gradle ./gradlew bootJar --no-daemon
 
 FROM eclipse-temurin:21-jre
 RUN apt-get update && apt-get install -y imagemagick libheif-dev && rm -rf /var/lib/apt/lists/*
