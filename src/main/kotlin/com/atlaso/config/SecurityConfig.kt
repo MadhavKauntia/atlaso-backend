@@ -46,6 +46,8 @@ class SecurityConfig(
                     .requestMatchers(HttpMethod.POST, "/api/trips/*/photos/confirm").permitAll()
                     // Public image/file access
                     .requestMatchers(HttpMethod.GET, "/api/trips/*/photos/*/image").permitAll()
+                    // Book cover for the book-ready email — capability-gated by the book UUID
+                    .requestMatchers(HttpMethod.GET, "/api/books/*/cover").permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/internal/file").permitAll()
                     .requestMatchers(HttpMethod.PUT, "/api/internal/upload").permitAll()
                     // Admin dashboard — JWT bypassed; guarded by AdminKeyInterceptor (X-Admin-Key)

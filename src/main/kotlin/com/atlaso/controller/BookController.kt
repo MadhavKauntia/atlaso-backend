@@ -130,6 +130,22 @@ class BookController(
         return ResponseEntity.noContent().build()
     }
 
+    /**
+     * Public cover image for the book-ready email. No auth by design: the unguessable book UUID is
+     * the capability (same as the emailed preview link). Streams the bytes — rather than redirecting
+     * to a presigned URL — so email image proxies that don't follow redirects still render it, and
+     * so nothing expires. Cached a day so repeat opens don't re-hit storage.
+     */
+    @GetMapping("/books/{bookId}/cover")
+    fun getBookCover(@PathVariable bookId: UUID): ResponseEntity<ByteArray> {
+        val (bytes, contentType) = bookGenerationService.loadCoverImage(bookId)
+            ?: return ResponseEntity.notFound().build()
+        return ResponseEntity.ok()
+            .contentType(MediaType.parseMediaType(contentType))
+            .header(HttpHeaders.CACHE_CONTROL, "public, max-age=86400")
+            .body(bytes)
+    }
+
     @GetMapping("/books/{bookId}/pdf")
     fun downloadPdf(
         @PathVariable bookId: UUID,

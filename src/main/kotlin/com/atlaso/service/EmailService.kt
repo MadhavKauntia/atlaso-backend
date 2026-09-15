@@ -48,10 +48,10 @@ class EmailService(
             return
         }
         val previewUrl = "$appUrl/trips/$tripId/preview?bookId=$bookId"
-        // Route the cover through the public, self-refreshing image endpoint (302 -> fresh presigned
-        // S3 URL on every load) so it still renders when the email is opened days later — never embed
-        // a raw presigned URL, which expires in an hour.
-        val coverUrl = coverPhotoId?.let { "$appUrl/api/trips/$tripId/photos/$it/image" }
+        // Route the cover through the public, capability-gated cover endpoint (auth-free, keyed by
+        // the book UUID). The per-photo /image endpoint can't be used here — it requires the owner's
+        // JWT, which an email client's image request never has.
+        val coverUrl = coverPhotoId?.let { "$appUrl/api/books/$bookId/cover" }
         val body = mapOf(
             "sender" to mapOf("name" to senderName, "email" to senderEmail),
             "to" to listOf(mapOf("email" to toEmail, "name" to (toName ?: toEmail))),

@@ -33,6 +33,7 @@ class BookGenerationService(
     private val tripService: TripService,
     private val bookPlanExplainer: BookPlanExplainer,
     private val emailService: EmailService,
+    private val storageService: StorageService,
     // @Lazy breaks the BookGenerationService <-> BookGenerationProcessor construction cycle.
     @Lazy private val processor: BookGenerationProcessor,
     // Dev switch: log the full spread-by-spread plan after every generation. Enable
@@ -163,6 +164,22 @@ class BookGenerationService(
         book.readyEmailSentAt = java.time.Instant.now()
         bookRepository.save(book)
         emailService.sendBookReadyEmail(email, owner.name, book.trip.id!!, bookId, book.title, book.coverPhoto?.id)
+    }
+
+    /**
+     * Loads the cover image bytes for [bookId] with NO ownership check — the book UUID itself is
+     * the capability (same posture as the emailed preview link). Backs the public cover endpoint so
+     * the book-ready email can render the cover without the recipient being authenticated. Prefers
+     * the small thumbnail derivative. Returns null when the book or its cover photo is missing.
+     */
+    @Transactional(readOnly = true)
+    fun loadCoverImage(bookId: UUID): Pair<ByteArray, String>? {
+        val book = bookRepository.findById(bookId).orElse(null) ?: return null
+        val photo = book.coverPhoto ?: return null
+        val thumb = photo.thumbnailKey
+        val key = thumb ?: photo.storageKey
+        val contentType = if (thumb != null) "image/jpeg" else photo.contentType
+        return storageService.load(key) to contentType
     }
 
     /** Runs [action] after the current transaction commits (or immediately if none is active). */
