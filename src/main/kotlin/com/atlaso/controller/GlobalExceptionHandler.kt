@@ -2,6 +2,7 @@ package com.atlaso.controller
 
 import com.atlaso.controller.dto.ErrorResponse
 import com.atlaso.service.BookNotFoundException
+import com.atlaso.service.FreePreviewQuotaExceededException
 import com.atlaso.service.GuestTokenException
 import com.atlaso.service.InvalidGoogleTokenException
 import com.atlaso.service.NoPhotosAvailableException
@@ -38,6 +39,13 @@ class GlobalExceptionHandler {
     @ExceptionHandler(NoPhotosAvailableException::class)
     fun handleNoPhotos(ex: NoPhotosAvailableException, request: HttpServletRequest): ResponseEntity<ErrorResponse> {
         return buildResponse(HttpStatus.BAD_REQUEST, ex.message, request)
+    }
+
+    // 402 so the client can distinguish "out of free previews" from other errors and prompt an order.
+    // The internal ex.message carries the user id, so we send a fixed user-facing message instead.
+    @ExceptionHandler(FreePreviewQuotaExceededException::class)
+    fun handleFreePreviewQuota(ex: FreePreviewQuotaExceededException, request: HttpServletRequest): ResponseEntity<ErrorResponse> {
+        return buildResponse(HttpStatus.PAYMENT_REQUIRED, "You've used all your free book previews. Place an order to create more.", request)
     }
 
     @ExceptionHandler(InvalidGoogleTokenException::class)

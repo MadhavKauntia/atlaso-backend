@@ -8,6 +8,7 @@ import com.atlaso.domain.photo.Photo
 import com.atlaso.domain.photo.PhotoMetadata
 import com.atlaso.domain.photo.UploadGrant
 import com.atlaso.domain.trip.TripStatus
+import com.atlaso.repository.BookRepository
 import com.atlaso.repository.PhotoRepository
 import com.atlaso.repository.TripRepository
 import com.atlaso.repository.UploadGrantRepository
@@ -32,7 +33,8 @@ class PhotoUploadService(
     private val storageService: StorageService,
     private val tripService: TripService,
     private val uploadGrantRepository: UploadGrantRepository,
-    private val tripRepository: TripRepository
+    private val tripRepository: TripRepository,
+    private val bookRepository: BookRepository
 ) {
     private val logger = LoggerFactory.getLogger(PhotoUploadService::class.java)
 
@@ -110,8 +112,15 @@ class PhotoUploadService(
         }
 
         // Atomic reservation: row-lock the trip so concurrent initiate calls can't each observe
-        // the same free capacity and overshoot the count/byte quota.
+        // the same free capacity and overshoot the count/byte quota. Generation takes the SAME
+        // lock, so checking for a book here (under the lock) is race-free against it.
         tripRepository.findByIdForUpdate(tripId).orElseThrow { TripNotFoundException(tripId) }
+        // Lock the photo set once a book has been generated: further uploads would be analysed
+        // (paid) without reserving a preview. Editing happens by swapping among already-uploaded
+        // photos in checkout, not by adding new ones.
+        require(!bookRepository.existsByTripId(tripId)) {
+            "Photos can't be added after a book has been generated for this trip. Start a new trip to make another book."
+        }
         val cutoff = Instant.now().minus(GRANT_TTL)
 
         // Quota counts confirmed photos AND outstanding (unexpired, unconsumed) reservations.
@@ -173,7 +182,14 @@ class PhotoUploadService(
         }
         // Same row lock as initiate: reservation-to-photo conversion must be serialized with
         // initiation so a concurrent initiate can't read across this commit and overshoot the quota.
+        // Generation takes the same lock, so the book check below is race-free against it.
         tripRepository.findByIdForUpdate(tripId).orElseThrow { TripNotFoundException(tripId) }
+        // Reject confirmation once a book exists — otherwise a grant initiated before generation
+        // could be confirmed after it, creating unanalysed photos that a later regeneration would
+        // pay to analyse without reserving a preview.
+        require(!bookRepository.existsByTripId(tripId)) {
+            "Photos can't be added after a book has been generated for this trip. Start a new trip to make another book."
+        }
         val trip = tripService.getTrip(tripId)
         val cutoff = Instant.now().minus(GRANT_TTL)
         val photos = confirmations.map { conf ->

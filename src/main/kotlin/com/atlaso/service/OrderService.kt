@@ -3,6 +3,7 @@ package com.atlaso.service
 import com.atlaso.domain.order.Checkout
 import com.atlaso.domain.order.Order
 import com.atlaso.domain.trip.TripStatus
+import com.atlaso.domain.user.FREE_PREVIEW_QUOTA
 import com.atlaso.repository.CheckoutRepository
 import com.atlaso.repository.OrderRepository
 import com.atlaso.repository.UserRepository
@@ -109,6 +110,8 @@ class OrderService(
         tripService.updateStatus(tripId, TripStatus.ORDERED)
         checkout.status = "COMPLETED"
         checkoutRepository.save(checkout)
+        // A paid order refills the buyer's free book-preview quota back to the full allowance.
+        userRepository.resetFreePreviews(userId, FREE_PREVIEW_QUOTA)
         logger.info("Recorded order ATL-{} for trip {}", saved.number, tripId)
 
         // Count the redemption against the coupon's usage cap — best-effort.
