@@ -13,6 +13,7 @@ import java.math.BigDecimal
 import java.util.Base64
 import java.text.NumberFormat
 import java.util.Locale
+import java.util.UUID
 
 /**
  * Sends transactional email via Brevo's REST API
@@ -25,10 +26,87 @@ class EmailService(
     @Value("\${brevo.api-key}") private val apiKey: String,
     @Value("\${brevo.sender-email}") private val senderEmail: String,
     @Value("\${brevo.sender-name}") private val senderName: String,
+    // Feature flag so book-ready emails can be switched off instantly via env.
+    @Value("\${atlaso.email.book-ready.enabled:true}") private val bookReadyEmailEnabled: Boolean,
+    @Value("\${atlaso.app-url:https://myatlaso.com}") private val appUrl: String,
     private val objectMapper: ObjectMapper,
 ) {
     private val logger = LoggerFactory.getLogger(EmailService::class.java)
     private val http = OkHttpClient()
+
+    /**
+     * Emails the trip owner that their photobook is ready to preview, with a deep link to the
+     * preview page. Best-effort: logs and returns on any problem, never throws.
+     */
+    fun sendBookReadyEmail(toEmail: String, toName: String?, tripId: UUID, bookId: UUID, bookTitle: String) {
+        if (!bookReadyEmailEnabled) {
+            logger.info("Book-ready email disabled — skipping for book {}", bookId)
+            return
+        }
+        if (apiKey.isBlank()) {
+            logger.warn("Brevo API key not configured — skipping book-ready email for book {}", bookId)
+            return
+        }
+        val previewUrl = "$appUrl/trips/$tripId/preview?bookId=$bookId"
+        val body = mapOf(
+            "sender" to mapOf("name" to senderName, "email" to senderEmail),
+            "to" to listOf(mapOf("email" to toEmail, "name" to (toName ?: toEmail))),
+            "subject" to "Your Atlaso photobook is ready to preview",
+            "htmlContent" to buildBookReadyHtml(toName, bookTitle, previewUrl),
+        )
+        try {
+            val request = Request.Builder()
+                .url("https://api.brevo.com/v3/smtp/email")
+                .header("api-key", apiKey)
+                .header("accept", "application/json")
+                .post(objectMapper.writeValueAsString(body).toRequestBody("application/json".toMediaType()))
+                .build()
+            http.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    logger.info("Sent book-ready email for book {} to {}", bookId, toEmail)
+                } else {
+                    logger.error(
+                        "Brevo book-ready email failed for book {}: HTTP {} {}",
+                        bookId, response.code, response.body?.string().orEmpty()
+                    )
+                }
+            }
+        } catch (ex: Exception) {
+            logger.error("Brevo book-ready email error for book {}", bookId, ex)
+        }
+    }
+
+    private fun buildBookReadyHtml(name: String?, title: String, previewUrl: String): String {
+        val hi = name?.trim()?.takeIf { it.isNotBlank() }?.let { "Hi $it, " } ?: ""
+        return """
+        <!doctype html>
+        <html>
+          <body style="margin:0;padding:0;background:#f3ead8;font-family:Arial,Helvetica,sans-serif;color:#262220;">
+            <div style="max-width:520px;margin:0 auto;padding:32px 24px;">
+              <img src="https://myatlaso.com/assets/logo-black.png" alt="Atlaso" height="34" style="display:block;height:34px;width:auto;border:0;" />
+              <div style="background:#ffffff;border-radius:16px;padding:28px 26px;margin-top:20px;">
+                <h1 style="font-size:22px;margin:0 0 8px;color:#262220;">Your photobook is ready 🎉</h1>
+                <p style="font-size:15px;line-height:1.6;color:#4a443e;margin:0 0 22px;">
+                  ${hi}we've finished designing <strong>$title</strong>. Take a look, and when you're happy with it, order your printed copy.
+                </p>
+                <a href="$previewUrl" style="display:inline-block;background:#c9352c;color:#ffffff;text-decoration:none;font-weight:700;font-size:15px;padding:13px 26px;border-radius:999px;">
+                  View your book &rarr;
+                </a>
+                <p style="font-size:13px;line-height:1.6;color:#8a7f6f;margin:22px 0 0;">
+                  Or paste this link into your browser:<br/>
+                  <a href="$previewUrl" style="color:#c9352c;word-break:break-all;">$previewUrl</a>
+                </p>
+              </div>
+              <p style="font-size:12px;color:#8a7f6f;text-align:center;margin:22px 0 0;line-height:1.6;">
+                Questions? Just reply to this email or write to
+                <a href="mailto:support@myatlaso.com" style="color:#c9352c;">support@myatlaso.com</a>.<br/>
+                Atlaso · <a href="https://myatlaso.com" style="color:#c9352c;">myatlaso.com</a>
+              </p>
+            </div>
+          </body>
+        </html>
+        """.trimIndent()
+    }
 
     /** Emails the order confirmation to the customer, attaching the receipt PDF when provided. */
     fun sendOrderConfirmation(order: Order, receiptPdf: ByteArray?) {

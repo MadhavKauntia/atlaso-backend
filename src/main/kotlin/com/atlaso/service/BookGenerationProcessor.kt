@@ -19,6 +19,10 @@ class BookGenerationProcessor(
     fun process(bookId: UUID, tripId: UUID) {
         try {
             bookGenerationService.runGeneration(bookId, tripId)
+            // Post-commit (runGeneration's own transaction has committed): notify the owner so a
+            // user who closed the tab still gets the preview link. Never fails the generation.
+            runCatching { bookGenerationService.sendBookReadyEmailIfNeeded(bookId) }
+                .onFailure { logger.error("Book-ready email step failed for book {}", bookId, it) }
         } catch (e: Exception) {
             logger.error("Async book generation failed for book {}", bookId, e)
             runCatching { bookGenerationService.markFailed(bookId) }

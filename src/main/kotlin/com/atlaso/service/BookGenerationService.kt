@@ -32,6 +32,7 @@ class BookGenerationService(
     private val layoutEngine: LayoutEngine,
     private val tripService: TripService,
     private val bookPlanExplainer: BookPlanExplainer,
+    private val emailService: EmailService,
     // @Lazy breaks the BookGenerationService <-> BookGenerationProcessor construction cycle.
     @Lazy private val processor: BookGenerationProcessor,
     // Dev switch: log the full spread-by-spread plan after every generation. Enable
@@ -136,6 +137,32 @@ class BookGenerationService(
             it.status = BookStatus.FAILED
             bookRepository.save(it)
         }
+    }
+
+    /**
+     * Emails the trip owner that their book is ready — once, only for the INITIAL generation
+     * (version 1). Called after [runGeneration] commits so a user who closed the tab still gets
+     * the preview link. Idempotent via [Book.readyEmailSentAt]; email failures never surface.
+     */
+    @Transactional
+    fun sendBookReadyEmailIfNeeded(bookId: UUID) {
+        val book = bookRepository.findById(bookId).orElse(null) ?: return
+        if (book.status != BookStatus.READY_FOR_PREVIEW) return
+        if (book.version != 1) return              // regenerations don't re-notify
+        if (book.readyEmailSentAt != null) return  // already sent
+
+        val owner = book.trip.user
+        val email = owner?.email?.takeIf { it.isNotBlank() }
+        if (email == null) {
+            logger.info("Book {} has no owner email — skipping book-ready email", bookId)
+            return
+        }
+
+        // Claim the send before dispatching so a retry can't double-send; the email call itself
+        // is best-effort and swallows its own errors.
+        book.readyEmailSentAt = java.time.Instant.now()
+        bookRepository.save(book)
+        emailService.sendBookReadyEmail(email, owner.name, book.trip.id!!, bookId, book.title)
     }
 
     /** Runs [action] after the current transaction commits (or immediately if none is active). */

@@ -48,6 +48,10 @@ data class Book(
     @Column(nullable = false, updatable = false, name = "generated_at")
     val generatedAt: Instant? = null,
 
+    /** When the "your book is ready" email was sent (null = not sent). Guards against double-send. */
+    @Column(name = "ready_email_sent_at")
+    var readyEmailSentAt: Instant? = null,
+
     @Column(name = "pdf_url", length = 1024)
     var pdfUrl: String? = null,
 
