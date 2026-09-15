@@ -28,8 +28,8 @@ class OrderServiceTest {
     private val payment = mock<PaymentService>()
     private val coupon = mock<CouponService>()
     private val receipt = mock<ReceiptRenderer>()
-    private val email = mock<EmailService>()
-    private val svc = OrderService(orderRepo, checkoutRepo, userRepo, tripService, bookGen, payment, coupon, receipt, email)
+    private val notifications = mock<OrderNotificationService>()
+    private val svc = OrderService(orderRepo, checkoutRepo, userRepo, tripService, bookGen, payment, coupon, receipt, notifications)
 
     private val tripId = UUID.randomUUID()
     private val userId = UUID.randomUUID()
@@ -51,26 +51,26 @@ class OrderServiceTest {
     @Test
     fun `rejects a payment that isn't captured`() {
         whenever(payment.fetchPayment(any())).thenReturn(pay(status = "authorized"))
-        assertThrows(PaymentVerificationException::class.java) { svc.recordPaidOrder(checkout(), "pay_1", null) }
+        assertThrows(PaymentVerificationException::class.java) { svc.recordPaidOrder(checkout(), "pay_1") }
     }
 
     @Test
     fun `rejects a payment bound to a different order`() {
         whenever(payment.fetchPayment(any())).thenReturn(pay(orderId = "order_OTHER"))
-        assertThrows(PaymentVerificationException::class.java) { svc.recordPaidOrder(checkout(), "pay_1", null) }
+        assertThrows(PaymentVerificationException::class.java) { svc.recordPaidOrder(checkout(), "pay_1") }
     }
 
     @Test
     fun `rejects underpayment`() {
         whenever(payment.fetchPayment(any())).thenReturn(pay(amount = expected - 1))
-        assertThrows(PaymentVerificationException::class.java) { svc.recordPaidOrder(checkout(), "pay_1", null) }
+        assertThrows(PaymentVerificationException::class.java) { svc.recordPaidOrder(checkout(), "pay_1") }
     }
 
     @Test
     fun `is idempotent — a replayed payment returns the existing order, no trip update`() {
         val existing = mock<Order>()
         whenever(orderRepo.findByRazorpayPaymentId("pay_1")).thenReturn(existing)
-        val result = svc.recordPaidOrder(checkout(), "pay_1", null)
+        val result = svc.recordPaidOrder(checkout(), "pay_1")
         assertSame(existing, result)
         verify(orderRepo, never()).save(any())
         verify(tripService, never()).updateStatus(any(), any())
@@ -84,14 +84,36 @@ class OrderServiceTest {
         whenever(bookGen.getLatestBookByTripId(tripId, userId)).thenThrow(RuntimeException("no book"))
         whenever(orderRepo.nextNumber()).thenReturn(5L)
         whenever(orderRepo.save(any<Order>())).thenAnswer { it.arguments[0] }
-        whenever(receipt.render(any())).thenThrow(RuntimeException("skip email"))
         val c = checkout()
 
-        svc.recordPaidOrder(c, "pay_1", null)
+        svc.recordPaidOrder(c, "pay_1")
 
         verify(orderRepo).save(any<Order>())
         verify(tripService).updateStatus(tripId, TripStatus.ORDERED)
         verify(checkoutRepo).save(c)
         assertEquals("COMPLETED", c.status)
+        // Receipt + email dispatched (no active tx in the unit test → afterCommit runs inline).
+        verify(notifications).sendOrderConfirmation(any())
+    }
+
+    @Test
+    fun `copies the checkout's shipping onto the recorded order`() {
+        whenever(payment.fetchPayment(any())).thenReturn(pay())
+        whenever(tripService.getTrip(tripId, userId)).thenReturn(Trip(id = tripId, name = "T", status = TripStatus.BOOK_GENERATED))
+        whenever(userRepo.findById(userId)).thenReturn(Optional.empty())
+        whenever(bookGen.getLatestBookByTripId(tripId, userId)).thenThrow(RuntimeException("no book"))
+        whenever(orderRepo.nextNumber()).thenReturn(7L)
+        whenever(orderRepo.save(any<Order>())).thenAnswer { it.arguments[0] }
+        val c = checkout().copy(
+            addressLine1 = "12 MG Road", city = "Bengaluru", state = "Karnataka",
+            pincode = "560001", shipCountry = "India", phone = "+919876543210",
+        )
+
+        val order = svc.recordPaidOrder(c, "pay_1")
+
+        assertEquals("12 MG Road", order.addressLine1)
+        assertEquals("Bengaluru", order.city)
+        assertEquals("560001", order.pincode)
+        assertEquals("+919876543210", order.phone)
     }
 }

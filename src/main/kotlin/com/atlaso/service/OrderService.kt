@@ -10,23 +10,14 @@ import com.atlaso.repository.UserRepository
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import org.springframework.transaction.support.TransactionSynchronization
+import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.util.UUID
 
 private const val UNIT_PRICE_MINOR = Pricing.UNIT_PRICE_MINOR // Rs. 1999 in paise
 
 /** Thrown when a captured payment fails server-side verification (status/amount/order/ownership). */
 class PaymentVerificationException(message: String) : RuntimeException(message)
-
-/** Shipping details captured at checkout (recipient name/email come from the account). */
-data class ShippingInput(
-    val addressLine1: String? = null,
-    val addressLine2: String? = null,
-    val city: String? = null,
-    val state: String? = null,
-    val pincode: String? = null,
-    val country: String? = null,
-    val phone: String? = null,
-)
 
 @Service
 class OrderService(
@@ -38,7 +29,7 @@ class OrderService(
     private val paymentService: PaymentService,
     private val couponService: CouponService,
     private val receiptRenderer: ReceiptRenderer,
-    private val emailService: EmailService,
+    private val orderNotificationService: OrderNotificationService,
 ) {
     private val logger = LoggerFactory.getLogger(OrderService::class.java)
 
@@ -48,9 +39,18 @@ class OrderService(
      * ≥ expected, currency), then — in one transaction — creates the order, flips the trip to
      * ORDERED, and closes the checkout. Idempotent on the payment id (app- and DB-level), so a
      * payment can't be replayed into multiple orders or against multiple trips.
+     *
+     * Shipping is read from the [checkout] (persisted at create-order time), so this is called
+     * identically from the browser-driven /verify path and the Razorpay webhook safety net.
+     *
+     * Concurrency: /verify and the webhook can call this for the same payment at nearly the same
+     * instant. Both pass the early [findByRazorpayPaymentId] guard, then race on the INSERT; the
+     * `ux_orders_razorpay_payment_id` unique index lets exactly one win. The loser surfaces a
+     * [org.springframework.dao.DataIntegrityViolationException] — callers treat that as
+     * "already recorded" (see PaymentController/PaymentWebhookController).
      */
     @Transactional
-    fun recordPaidOrder(checkout: Checkout, razorpayPaymentId: String, shipping: ShippingInput? = null): Order {
+    fun recordPaidOrder(checkout: Checkout, razorpayPaymentId: String): Order {
         orderRepository.findByRazorpayPaymentId(razorpayPaymentId)?.let { return it }
 
         val payment = paymentService.fetchPayment(razorpayPaymentId)
@@ -91,13 +91,13 @@ class OrderService(
             quantity = qty,
             customerName = user?.name,
             customerEmail = user?.email ?: payment?.email,
-            addressLine1 = shipping?.addressLine1?.ifBlank { null },
-            addressLine2 = shipping?.addressLine2?.ifBlank { null },
-            city = shipping?.city?.ifBlank { null },
-            state = shipping?.state?.ifBlank { null },
-            pincode = shipping?.pincode?.ifBlank { null },
-            shipCountry = shipping?.country?.ifBlank { null },
-            phone = shipping?.phone?.ifBlank { null },
+            addressLine1 = checkout.addressLine1?.ifBlank { null },
+            addressLine2 = checkout.addressLine2?.ifBlank { null },
+            city = checkout.city?.ifBlank { null },
+            state = checkout.state?.ifBlank { null },
+            pincode = checkout.pincode?.ifBlank { null },
+            shipCountry = checkout.shipCountry?.ifBlank { null },
+            phone = checkout.phone?.ifBlank { null },
             couponCode = coupon?.code,
             razorpayOfferId = coupon?.razorpayOfferId,
             discountMinor = discountMinor,
@@ -117,13 +117,29 @@ class OrderService(
         // Count the redemption against the coupon's usage cap — best-effort.
         coupon?.let { runCatching { couponService.recordRedemption(it) } }
 
-        // Best-effort order confirmation email with the receipt attached.
-        runCatching {
-            val receipt = receiptRenderer.render(saved)
-            emailService.sendOrderConfirmation(saved, receipt)
-        }.onFailure { logger.error("Order confirmation email failed for ATL-{}", saved.number, it) }
+        // Receipt render + confirmation email run AFTER commit, off the request thread — so the
+        // Razorpay webhook responds within its 5s budget and no email is sent for an order that
+        // ends up rolling back.
+        afterCommit { orderNotificationService.sendOrderConfirmation(saved) }
 
         return saved
+    }
+
+    /** The recorded order for a Razorpay payment id, if one exists. Used by the /verify and
+     *  webhook callers to distinguish "the other path already inserted this payment" from an
+     *  unrelated integrity failure after catching a DataIntegrityViolationException. */
+    fun findRecordedOrder(razorpayPaymentId: String): Order? =
+        orderRepository.findByRazorpayPaymentId(razorpayPaymentId)
+
+    /** Runs [action] after the current transaction commits (or immediately if none is active). */
+    private fun afterCommit(action: () -> Unit) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(object : TransactionSynchronization {
+                override fun afterCommit() = action()
+            })
+        } else {
+            action()
+        }
     }
 
     /** Generates the receipt PDF for the latest order on [tripId], owner-checked. */

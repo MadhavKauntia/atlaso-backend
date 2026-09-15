@@ -24,4 +24,17 @@ class AsyncConfig {
         executor.initialize()
         return executor
     }
+
+    /** Small pool for post-commit order side effects (receipt render + confirmation email), kept
+     *  off the request thread so the Razorpay webhook can respond within its 5s budget. */
+    @Bean("orderNotificationExecutor")
+    fun orderNotificationExecutor(): Executor {
+        val executor = ThreadPoolTaskExecutor()
+        executor.corePoolSize = 1
+        executor.maxPoolSize = 3
+        executor.queueCapacity = 100
+        executor.setThreadNamePrefix("order-notify-")
+        executor.initialize()
+        return executor
+    }
 }

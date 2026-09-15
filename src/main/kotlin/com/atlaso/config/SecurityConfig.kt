@@ -37,6 +37,8 @@ class SecurityConfig(
                 auth
                     .requestMatchers(HttpMethod.GET, "/health").permitAll()
                     .requestMatchers(HttpMethod.POST, "/api/auth/google").permitAll()
+                    // Razorpay webhook — no JWT; authenticated by the HMAC signature over the raw body.
+                    .requestMatchers(HttpMethod.POST, "/api/payments/webhook").permitAll()
                     .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                     // Guest trip flow — no auth required until claim
                     .requestMatchers(HttpMethod.POST, "/api/trips").permitAll()

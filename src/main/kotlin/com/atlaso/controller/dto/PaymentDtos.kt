@@ -12,6 +12,15 @@ data class CreateOrderRequest(
     val receipt: String? = null,
     // When present, the coupon's Razorpay offer is linked to the order.
     val couponCode: String? = null,
+    // Shipping details captured at checkout, persisted on the Checkout so the webhook can
+    // record a complete, shippable order even if the browser never reaches /verify.
+    val addressLine1: String? = null,
+    val addressLine2: String? = null,
+    val city: String? = null,
+    val state: String? = null,
+    val pincode: String? = null,
+    val country: String? = null,
+    val phone: String? = null,
 )
 
 data class CreateOrderResponse(

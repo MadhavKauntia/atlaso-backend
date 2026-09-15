@@ -44,6 +44,29 @@ data class Checkout(
     @Column(name = "coupon_code", length = 64)
     val couponCode: String? = null,
 
+    // Shipping details captured at create-order time (recipient name/email come from the
+    // account). Persisted here so the webhook can record a shippable order without the browser.
+    @Column(name = "address_line1", length = 255)
+    val addressLine1: String? = null,
+
+    @Column(name = "address_line2", length = 255)
+    val addressLine2: String? = null,
+
+    @Column(length = 128)
+    val city: String? = null,
+
+    @Column(length = 128)
+    val state: String? = null,
+
+    @Column(length = 32)
+    val pincode: String? = null,
+
+    @Column(name = "ship_country", length = 64)
+    val shipCountry: String? = null,
+
+    @Column(length = 32)
+    val phone: String? = null,
+
     @Column(nullable = false, length = 16)
     var status: String = "PENDING", // PENDING | COMPLETED
 

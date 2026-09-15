@@ -1,5 +1,6 @@
 package com.atlaso.controller
 
+import com.atlaso.controller.dto.CreateOrderRequest
 import com.atlaso.controller.dto.VerifyPaymentRequest
 import com.atlaso.domain.order.Checkout
 import com.atlaso.repository.CheckoutRepository
@@ -41,7 +42,7 @@ class PaymentControllerTest {
         whenever(paymentService.verifySignature("order_1", "pay_1", "sig")).thenReturn(false)
         val res = controller.verifyPayment(req(), jwt)
         assertEquals(400, res.statusCode.value())
-        verify(orderService, never()).recordPaidOrder(any(), any(), any())
+        verify(orderService, never()).recordPaidOrder(any(), any())
     }
 
     @Test
@@ -50,7 +51,7 @@ class PaymentControllerTest {
         whenever(checkoutRepo.findByRazorpayOrderId("order_1")).thenReturn(null)
         val res = controller.verifyPayment(req(), jwt)
         assertEquals(400, res.statusCode.value())
-        verify(orderService, never()).recordPaidOrder(any(), any(), any())
+        verify(orderService, never()).recordPaidOrder(any(), any())
     }
 
     @Test
@@ -59,7 +60,7 @@ class PaymentControllerTest {
         whenever(checkoutRepo.findByRazorpayOrderId("order_1")).thenReturn(checkout(owner = UUID.randomUUID()))
         val res = controller.verifyPayment(req(), jwt)
         assertEquals(403, res.statusCode.value())
-        verify(orderService, never()).recordPaidOrder(any(), any(), any())
+        verify(orderService, never()).recordPaidOrder(any(), any())
     }
 
     @Test
@@ -69,6 +70,32 @@ class PaymentControllerTest {
         whenever(checkoutRepo.findByRazorpayOrderId("order_1")).thenReturn(c)
         val res = controller.verifyPayment(req(), jwt)
         assertEquals(200, res.statusCode.value())
-        verify(orderService).recordPaidOrder(any(), any(), any())
+        verify(orderService).recordPaidOrder(any(), any())
+    }
+
+    // --- create-order shipping validation ---
+
+    private fun orderReq(
+        addressLine1: String? = "12 MG Road", city: String? = "Bengaluru", state: String? = "Karnataka",
+        pincode: String? = "560001", country: String? = "India", phone: String? = "+919876543210",
+    ) = CreateOrderRequest(
+        tripId = UUID.randomUUID(), quantity = 1, addressLine1 = addressLine1, city = city,
+        state = state, pincode = pincode, country = country, phone = phone,
+    )
+
+    @Test
+    fun `create-order rejects missing shipping and never creates a Razorpay order`() {
+        val res = controller.createOrder(orderReq(addressLine1 = null), jwt)
+        assertEquals(400, res.statusCode.value())
+        verify(paymentService, never()).createOrder(any(), any(), any(), any(), any())
+        verify(checkoutRepo, never()).save(any())
+    }
+
+    @Test
+    fun `create-order rejects an invalid pincode and never creates a Razorpay order`() {
+        val res = controller.createOrder(orderReq(pincode = "12"), jwt)
+        assertEquals(400, res.statusCode.value())
+        verify(paymentService, never()).createOrder(any(), any(), any(), any(), any())
+        verify(checkoutRepo, never()).save(any())
     }
 }

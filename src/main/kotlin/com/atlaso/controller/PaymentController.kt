@@ -9,12 +9,12 @@ import com.atlaso.service.CouponService
 import com.atlaso.service.OrderService
 import com.atlaso.service.PaymentVerificationException
 import com.atlaso.service.Pricing
-import com.atlaso.service.ShippingInput
 import com.atlaso.service.PaymentService
 import com.atlaso.service.RazorpayAuthException
 import com.atlaso.service.RazorpayException
 import com.atlaso.service.TripService
 import org.slf4j.LoggerFactory
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.security.core.annotation.AuthenticationPrincipal
@@ -49,6 +49,13 @@ class PaymentController(
         // Ownership — you can only pay for your own trip (throws → 404 if not).
         tripService.getTrip(request.tripId, userId)
 
+        // Validate shipping server-side BEFORE creating the Razorpay order — the webhook records
+        // an order straight from the Checkout, so an incomplete/invalid address must never make
+        // it to a payment. The client's own validation is not trusted.
+        val shipping = ShippingValidator.validate(request).getOrElse { ex ->
+            return ResponseEntity.badRequest().body(mapOf("error" to (ex.message ?: "Invalid shipping details")))
+        }
+
         val quantity = (request.quantity ?: 1).coerceIn(1, MAX_QUANTITY)
         // Price is computed here, server-side — the client cannot choose the amount.
         val listMinor = quantity * Pricing.UNIT_PRICE_MINOR
@@ -79,6 +86,13 @@ class PaymentController(
                     amountMinor = expectedCaptured,
                     currency = "INR",
                     couponCode = request.couponCode?.takeIf { it.isNotBlank() },
+                    addressLine1 = shipping.addressLine1,
+                    addressLine2 = shipping.addressLine2,
+                    city = shipping.city,
+                    state = shipping.state,
+                    pincode = shipping.pincode,
+                    shipCountry = shipping.country,
+                    phone = shipping.phone,
                 )
             )
             ResponseEntity.ok(CreateOrderResponse(order.orderId, order.amount, order.currency))
@@ -125,20 +139,23 @@ class PaymentController(
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(mapOf("verified" to false, "error" to "Not your checkout"))
         }
 
-        val shipping = ShippingInput(
-            addressLine1 = request.addressLine1,
-            addressLine2 = request.addressLine2,
-            city = request.city,
-            state = request.state,
-            pincode = request.pincode,
-            country = request.country,
-            phone = request.phone,
-        )
         return try {
             // Re-verifies the captured payment (status/amount/order) and records the order,
             // flips the trip to ORDERED, and closes the checkout — all in one transaction.
-            orderService.recordPaidOrder(checkout, paymentId, shipping)
+            // Shipping is read from the checkout (persisted at create-order time).
+            orderService.recordPaidOrder(checkout, paymentId)
             ResponseEntity.ok(mapOf("verified" to true))
+        } catch (ex: DataIntegrityViolationException) {
+            // Could be the webhook recording this exact payment concurrently (fine), OR an
+            // unrelated constraint failure (no order). Only report success if the order exists.
+            if (orderService.findRecordedOrder(paymentId) != null) {
+                logger.info("Order for payment {} already recorded (concurrent webhook); treating as verified", paymentId)
+                ResponseEntity.ok(mapOf("verified" to true))
+            } else {
+                logger.error("Order insert failed for payment {} with no recorded order: {}", paymentId, ex.message)
+                ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(mapOf("verified" to false, "error" to "We couldn't record your order. You have not been charged twice. Please contact support."))
+            }
         } catch (ex: PaymentVerificationException) {
             logger.warn("Payment verification failed for order {}: {}", orderId, ex.message)
             ResponseEntity.status(HttpStatus.BAD_REQUEST)
