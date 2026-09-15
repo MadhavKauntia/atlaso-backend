@@ -25,6 +25,10 @@ class PhotoSelector(
     companion object {
         // subjectType values that mark a photo as people-focused (exempt from the repeat-subject cap).
         private val PEOPLE_SUBJECT_TYPES = setOf("person", "couple", "group")
+        // Rank multiplier for low-narrative object shots (souvenir mugs, product/merchandise
+        // close-ups): subjectType "object" in an uncategorised "misc" scene. The vision model often
+        // still rates these a plausible keepsake, so this keeps them from winning slots on quality alone.
+        private const val OBJECT_MISC_RANK_PENALTY = 0.6
     }
 
     /**
@@ -237,7 +241,11 @@ class PhotoSelector(
         // more memorable one within its cluster/event. Scales quality to [0.4x .. 1.0x] over
         // keepsakeInterest, so a mundane-but-crisp frame never out-ranks the real memory beside it.
         val keepsakeMultiplier = 0.4 + 0.6 * s.keepsakeInterest.coerceIn(0.0, 1.0)
-        return baseQuality * keepsakeMultiplier
+        // Low-narrative object penalty: a souvenir/product shot (subjectType "object" in a "misc"
+        // scene) that the model still scored a decent keepsake shouldn't beat real memories into the
+        // book on sharpness/aesthetics alone.
+        val narrativePenalty = if (s.subjectType == "object" && s.sceneType == "misc") OBJECT_MISC_RANK_PENALTY else 1.0
+        return baseQuality * keepsakeMultiplier * narrativePenalty
     }
 
     private fun objectJaccard(a: List<String>, b: List<String>): Double {
