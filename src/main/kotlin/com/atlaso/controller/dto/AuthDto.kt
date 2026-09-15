@@ -11,14 +11,16 @@ data class UserDto(
     val id: UUID,
     val email: String,
     val name: String,
-    val pictureUrl: String?
+    val pictureUrl: String?,
+    val freePreviewsRemaining: Int
 ) {
     companion object {
         fun from(user: User) = UserDto(
             id = user.id!!,
             email = user.email,
             name = user.name,
-            pictureUrl = user.pictureUrl
+            pictureUrl = user.pictureUrl,
+            freePreviewsRemaining = user.freePreviewsRemaining
         )
     }
 }
