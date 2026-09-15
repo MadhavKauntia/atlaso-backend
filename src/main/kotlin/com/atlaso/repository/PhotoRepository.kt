@@ -13,7 +13,7 @@ interface PhotoRepository : JpaRepository<Photo, UUID> {
     fun countByTripId(tripId: UUID): Long
     fun findByIdAndTripId(id: UUID, tripId: UUID): Optional<Photo>
 
-    /** Total confirmed bytes stored for a trip (for the cumulative byte quota). */
-    @Query("SELECT COALESCE(SUM(p.fileSize), 0) FROM Photo p WHERE p.trip.id = :tripId")
+    /** Total confirmed bytes stored for a trip (main + thumbnail) for the cumulative byte quota. */
+    @Query("SELECT COALESCE(SUM(p.fileSize + COALESCE(p.thumbnailSizeBytes, 0)), 0) FROM Photo p WHERE p.trip.id = :tripId")
     fun sumFileSizeByTripId(tripId: UUID): Long
 }

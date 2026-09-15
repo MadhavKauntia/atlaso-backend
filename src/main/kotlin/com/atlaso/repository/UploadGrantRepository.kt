@@ -1,6 +1,7 @@
 package com.atlaso.repository
 
 import com.atlaso.domain.photo.UploadGrant
+import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Modifying
 import org.springframework.data.jpa.repository.Query
@@ -26,8 +27,14 @@ interface UploadGrantRepository : JpaRepository<UploadGrant, UUID> {
     @Query("UPDATE UploadGrant g SET g.consumed = true WHERE g.id = :id AND g.consumed = false")
     fun markConsumed(@Param("id") id: UUID): Int
 
-    /** Expired, unconsumed grants — abandoned reservations whose S3 objects are orphans. */
-    fun findByConsumedFalseAndCreatedAtBefore(cutoff: Instant): List<UploadGrant>
+    /** Expired, unconsumed grants — abandoned reservations whose S3 objects are orphans. Paged so
+     *  a single run touches a bounded batch (rows we fail to clean stay for the next run). */
+    fun findByConsumedFalseAndCreatedAtBefore(cutoff: Instant, pageable: Pageable): List<UploadGrant>
+
+    /** Deletes the given grant rows by id in one statement (used after their objects are gone). */
+    @Modifying
+    @Query("DELETE FROM UploadGrant g WHERE g.id IN :ids")
+    fun deleteByIdIn(@Param("ids") ids: Collection<UUID>): Int
 
     /** Removes old consumed grant rows (the photo owns its object; the grant record is done). */
     @Modifying

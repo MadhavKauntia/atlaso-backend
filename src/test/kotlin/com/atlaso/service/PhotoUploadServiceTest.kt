@@ -42,6 +42,12 @@ class PhotoUploadServiceTest {
         return out.toByteArray()
     }
 
+    private fun jpeg(w: Int = 10, h: Int = 10): ByteArray {
+        val out = ByteArrayOutputStream()
+        ImageIO.write(BufferedImage(w, h, BufferedImage.TYPE_INT_RGB), "jpeg", out)
+        return out.toByteArray()
+    }
+
     private fun grant(
         createdAt: Instant = Instant.now(),
         size: Long = 1000,
@@ -61,6 +67,8 @@ class PhotoUploadServiceTest {
     @BeforeEach
     fun setup() {
         whenever(tripService.getTrip(tripId)).thenReturn(Trip(id = tripId, name = "T", status = TripStatus.UPLOADING_PHOTOS))
+        // confirmUploads row-locks the trip before converting reservations.
+        whenever(tripRepo.findByIdForUpdate(tripId)).thenReturn(Optional.of(Trip(id = tripId, name = "T", status = TripStatus.UPLOADING_PHOTOS)))
         // Defaults for the happy path — individual tests override to trigger a specific rejection.
         whenever(storage.head(key)).thenReturn(ObjectHead(contentLength = 1000, contentType = "image/png"))
         whenever(storage.load(key)).thenReturn(png())
@@ -120,6 +128,35 @@ class PhotoUploadServiceTest {
         whenever(grantRepo.findByPhotoIdAndTripId(photoId, tripId)).thenReturn(grant())
         whenever(grantRepo.markConsumed(any())).thenReturn(0) // lost the atomic consume race
         assertThrows(IllegalArgumentException::class.java) { svc.confirmUploads(tripId, listOf(conf())) }
+    }
+
+    @Test
+    fun `confirm rejects when the object's actual format differs from the declared type`() {
+        // Grant + HEAD say PNG, but the stored bytes are really a JPEG — reject the mismatch.
+        whenever(grantRepo.findByPhotoIdAndTripId(photoId, tripId)).thenReturn(grant())
+        whenever(storage.load(key)).thenReturn(jpeg())
+        assertThrows(IllegalArgumentException::class.java) { svc.confirmUploads(tripId, listOf(conf())) }
+    }
+
+    @Test
+    fun `confirm rejects a thumbnail whose bytes aren't a real image`() {
+        val thumbKey = "$tripId/${photoId}_thumb.jpg"
+        whenever(grantRepo.findByPhotoIdAndTripId(photoId, tripId)).thenReturn(grant(thumb = thumbKey, thumbSize = 200))
+        whenever(storage.head(thumbKey)).thenReturn(ObjectHead(contentLength = 200, contentType = "image/jpeg"))
+        whenever(storage.load(thumbKey)).thenReturn("not an image".toByteArray())
+        assertThrows(IllegalArgumentException::class.java) { svc.confirmUploads(tripId, listOf(conf(thumb = thumbKey))) }
+    }
+
+    @Test
+    fun `confirm records the thumbnail size toward the trip byte quota`() {
+        val thumbKey = "$tripId/${photoId}_thumb.jpg"
+        whenever(grantRepo.findByPhotoIdAndTripId(photoId, tripId)).thenReturn(grant(thumb = thumbKey, thumbSize = 200))
+        whenever(storage.head(thumbKey)).thenReturn(ObjectHead(contentLength = 200, contentType = "image/jpeg"))
+        whenever(storage.load(thumbKey)).thenReturn(jpeg())
+
+        val result = svc.confirmUploads(tripId, listOf(conf(thumb = thumbKey)))
+
+        assertEquals(200L, result[0].thumbnailSizeBytes)
     }
 
     @Test

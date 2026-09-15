@@ -62,7 +62,9 @@ class PhotoUploadService(
         // prevents unbounded growth from unconfirmed grants.
         const val MAX_BYTES_PER_TRIP = 50L * 1024 * 1024 * 1024 // 50 GB
         const val MAX_IMAGE_DIMENSION = 30000 // per-side pixel cap
-        const val MAX_IMAGE_PIXELS = 200_000_000L // 200 MP — headroom for high-res DSLR/medium-format
+        // Bounded to keep a full decode (PDF export) within the container heap — a 4-byte/px
+        // raster of 80 MP is ~320 MB. Covers even 61 MP DSLR; raise only with more memory.
+        const val MAX_IMAGE_PIXELS = 80_000_000L // 80 MP
         // Outstanding (unconsumed) grants count toward the trip quota until they expire, so a
         // caller can't mint unlimited reservations by never confirming.
         val GRANT_TTL: Duration = Duration.ofHours(24)
@@ -224,6 +226,9 @@ class PhotoUploadService(
         require(confirmations.isNotEmpty() && confirmations.size <= MAX_UPLOAD_BATCH) {
             "Between 1 and $MAX_UPLOAD_BATCH photos may be confirmed per request."
         }
+        // Same row lock as initiate: reservation-to-photo conversion must be serialized with
+        // initiation so a concurrent initiate can't read across this commit and overshoot the quota.
+        tripRepository.findByIdForUpdate(tripId).orElseThrow { TripNotFoundException(tripId) }
         val trip = tripService.getTrip(tripId)
         val cutoff = Instant.now().minus(GRANT_TTL)
         val photos = confirmations.map { conf ->
@@ -241,14 +246,15 @@ class PhotoUploadService(
             head.contentType?.substringBefore(';')?.trim()?.let { actual ->
                 require(actual.equals(grant.contentType, ignoreCase = true)) { "Uploaded object content type mismatch" }
             }
-            // HEAD thumbnail: exists and matches the reserved thumbnail size.
+            // Validate the MAIN object is a genuine, decodable image of the declared format.
+            val dims = validateImageObject(grant.storageKey, grant.contentType)
+
+            // HEAD + validate the thumbnail: exists, exact reserved size, and is a real JPEG.
             grant.thumbnailKey?.let { tk ->
                 val th = storageService.head(tk) ?: throw IllegalArgumentException("Thumbnail object not found")
                 grant.thumbnailMaxSizeBytes?.let { require(th.contentLength == it) { "Thumbnail size does not match the initiated upload" } }
+                validateImageObject(tk, "image/jpeg")
             }
-
-            // Validate the actual bytes are a real image of an allowed format with safe dimensions.
-            val dims = validateImageObject(grant.storageKey)
 
             // Atomically consume the grant — only one concurrent confirm can win, enforcing one-time use.
             require(uploadGrantRepository.markConsumed(grant.id!!) == 1) { "This upload was already confirmed" }
@@ -261,10 +267,11 @@ class PhotoUploadService(
                 originalFilename = conf.originalFilename,
                 contentType = grant.contentType,        // server-recorded content type
                 fileSize = grant.maxSizeBytes,          // presigned PUT bound Content-Length to this
+                thumbnailSizeBytes = grant.thumbnailMaxSizeBytes,  // count thumbnail toward the byte quota
                 metadata = PhotoMetadata(
-                    // Server-validated dimensions when available, else the (capped) client values.
-                    width = dims?.first ?: conf.width.coerceIn(0, MAX_IMAGE_DIMENSION),
-                    height = dims?.second ?: conf.height.coerceIn(0, MAX_IMAGE_DIMENSION),
+                    // Server-validated dimensions (from the decoded/parsed object), not client-supplied.
+                    width = dims.first,
+                    height = dims.second,
                     takenAt = takenAt,
                     location = if (conf.latitude != null && conf.longitude != null)
                         GeoLocation(conf.latitude, conf.longitude) else null,
@@ -281,11 +288,12 @@ class PhotoUploadService(
     }
 
     /**
-     * Downloads the object and verifies it is a genuine image (of a recognized image format)
-     * with safe dimensions — so arbitrary bytes merely labeled as an image can't enter the
-     * vision/PDF pipeline. Returns the parsed (width, height) when the format exposes it.
+     * Downloads the object and verifies it is a genuine, decodable image whose detected format
+     * matches [expectedContentType], with dimensions within the caps — so arbitrary bytes merely
+     * labeled as an image (or a header with no pixel data) can't enter the vision/PDF pipeline.
+     * Returns the validated (width, height).
      */
-    private fun validateImageObject(storageKey: String): Pair<Int, Int>? {
+    private fun validateImageObject(storageKey: String, expectedContentType: String): Pair<Int, Int> {
         val bytes = storageService.load(storageKey)
         val metadata: Metadata = try {
             ImageMetadataReader.readMetadata(ByteArrayInputStream(bytes))
@@ -294,15 +302,58 @@ class PhotoUploadService(
         }
         val mime = metadata.getFirstDirectoryOfType(FileTypeDirectory::class.java)
             ?.getString(FileTypeDirectory.TAG_DETECTED_FILE_MIME_TYPE)
-        require(mime != null && mime.startsWith("image/")) { "Uploaded file is not an image" }
-
-        val dims = readImageDimensions(metadata)
-        if (dims != null) {
-            val (w, h) = dims
-            require(w in 1..MAX_IMAGE_DIMENSION && h in 1..MAX_IMAGE_DIMENSION) { "Image dimensions exceed the allowed maximum" }
-            require(w.toLong() * h.toLong() <= MAX_IMAGE_PIXELS) { "Image resolution exceeds the allowed maximum" }
+        require(mime != null && mime.startsWith("image/") && mimeMatches(mime, expectedContentType)) {
+            "Uploaded file type does not match the declared image type"
         }
-        return dims
+
+        // Prove the pixel data actually decodes (Java-decodable formats); for formats without a
+        // Java reader (HEIC/WebP) fall back to the header dimensions. Dimensions are required.
+        val dims = boundedDecodeDimensions(bytes)
+            ?: readImageDimensions(metadata)
+            ?: throw IllegalArgumentException("Could not determine image dimensions")
+        val (w, h) = dims
+        require(w in 1..MAX_IMAGE_DIMENSION && h in 1..MAX_IMAGE_DIMENSION) { "Image dimensions exceed the allowed maximum" }
+        require(w.toLong() * h.toLong() <= MAX_IMAGE_PIXELS) { "Image resolution exceeds the allowed maximum" }
+        return w to h
+    }
+
+    /** Detected vs. expected MIME, treating HEIC/HEIF as equivalent and ignoring parameters. */
+    private fun mimeMatches(detected: String, expected: String): Boolean {
+        fun norm(s: String) = s.substringBefore(';').trim().lowercase().let { if (it == "image/heif") "image/heic" else it }
+        return norm(detected) == norm(expected)
+    }
+
+    /**
+     * Decodes the image with a bounded, subsampled read to prove the pixel stream is valid without
+     * materialising a full-resolution raster (an 80 MP image would otherwise need ~320 MB). Returns
+     * the true (width, height), throws if a reader exists but the data is undecodable/oversized, or
+     * returns null if no Java ImageIO reader supports the format (HEIC/WebP).
+     */
+    private fun boundedDecodeDimensions(bytes: ByteArray): Pair<Int, Int>? {
+        ImageIO.createImageInputStream(ByteArrayInputStream(bytes)).use { iis ->
+            val readers = ImageIO.getImageReaders(iis)
+            if (!readers.hasNext()) return null
+            val reader = readers.next()
+            try {
+                reader.input = iis
+                val w = reader.getWidth(0)
+                val h = reader.getHeight(0)
+                require(w in 1..MAX_IMAGE_DIMENSION && h in 1..MAX_IMAGE_DIMENSION) { "Image dimensions exceed the allowed maximum" }
+                require(w.toLong() * h.toLong() <= MAX_IMAGE_PIXELS) { "Image resolution exceeds the allowed maximum" }
+                // Subsample down to ~1 MP so the decode proves validity cheaply.
+                val sub = maxOf(1, Math.ceil(Math.sqrt((w.toLong() * h) / 1_000_000.0)).toInt())
+                val param = reader.defaultReadParam.apply { setSourceSubsampling(sub, sub, 0, 0) }
+                val image = try {
+                    reader.read(0, param)
+                } catch (e: Exception) {
+                    throw IllegalArgumentException("Uploaded file is not a decodable image")
+                }
+                requireNotNull(image) { "Uploaded file is not a decodable image" }
+                return w to h
+            } finally {
+                reader.dispose()
+            }
+        }
     }
 
     /** Extracts pixel dimensions from parsed image metadata (works across JPEG/PNG/WebP/HEIF). */
