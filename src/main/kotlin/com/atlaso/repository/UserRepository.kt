@@ -23,9 +23,4 @@ interface UserRepository : JpaRepository<User, UUID> {
     @Modifying
     @Query("UPDATE User u SET u.freePreviewsRemaining = :quota WHERE u.id = :id")
     fun resetFreePreviews(@Param("id") id: UUID, @Param("quota") quota: Int): Int
-
-    /** Returns one consumed preview (capped at [quota]) — used to refund a failed first generation. */
-    @Modifying
-    @Query("UPDATE User u SET u.freePreviewsRemaining = u.freePreviewsRemaining + 1 WHERE u.id = :id AND u.freePreviewsRemaining < :quota")
-    fun refundFreePreview(@Param("id") id: UUID, @Param("quota") quota: Int): Int
 }

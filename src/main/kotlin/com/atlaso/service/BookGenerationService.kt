@@ -6,14 +6,14 @@ import com.atlaso.domain.book.Book
 import com.atlaso.domain.book.BookStatus
 import com.atlaso.domain.book.PhotoSlot
 import com.atlaso.domain.trip.TripStatus
-import com.atlaso.domain.user.FREE_PREVIEW_QUOTA
+import com.atlaso.domain.trip.Trip
 import com.atlaso.repository.BookRepository
 import com.atlaso.repository.PageRepository
 import com.atlaso.repository.PhotoRepository
+import com.atlaso.repository.TripRepository
 import com.atlaso.repository.UserRepository
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
-import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.context.annotation.Lazy
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -32,6 +32,7 @@ class BookGenerationService(
     private val photoRepository: PhotoRepository,
     private val pageRepository: PageRepository,
     private val userRepository: UserRepository,
+    private val tripRepository: TripRepository,
     private val photoAnalysisService: PhotoAnalysisService,
     private val photoSelector: PhotoSelector,
     private val layoutEngine: LayoutEngine,
@@ -54,39 +55,34 @@ class BookGenerationService(
      * of vision analysis. The client polls GET /books/{id} until status flips to
      * READY_FOR_PREVIEW (or FAILED).
      */
+    @Transactional
     fun startGeneration(tripId: UUID, userId: UUID, coverCountry: String? = null, subtitle: String? = null): Book {
-        val trip = tripService.getTrip(tripId, userId)
-        val nextVersion = (bookRepository.findByTripIdOrderByVersionDesc(tripId).firstOrNull()?.version ?: 0) + 1
+        tripService.getTrip(tripId, userId) // ownership check
+        // Serialize all of a trip's generation/upload activity on the trip row (uploads take the
+        // same lock). This makes the version calc, the quota reservation, and the photo-set lock
+        // race-free: concurrent submits queue here rather than double-charging or duplicating v1.
+        val trip = tripRepository.findByIdForUpdate(tripId).orElseThrow { IllegalStateException("Trip not found: $tripId") }
+        // A rapid double-submit of the first generation returns the in-flight book instead of
+        // starting a second worker (the unique (trip_id, version) constraint is the final guard).
+        val latest = bookRepository.findByTripIdOrderByVersionDesc(tripId).firstOrNull()
+        if (latest != null && latest.status == BookStatus.GENERATING) return latest
+
+        reservePreviewIfNeeded(trip, userId)
+
         // Persist the cover country at creation, so it's committed before the worker runs (which
         // reloads and preserves it) and before the ready-email fires — regardless of whether the
         // client stays on the generating tab to PATCH it later. Without this the cover renders
         // blank on a cold load from the email link.
-        //
-        // saveAndFlush surfaces the (trip_id, version) unique constraint NOW: two concurrent
-        // first-generation submits both compute version 1, but only one INSERT wins — the loser
-        // gets a violation and returns the winner's in-flight book, so a trip is never generated
-        // (or charged) twice by a double-submit.
-        val book = try {
-            bookRepository.saveAndFlush(
-                Book(
-                    trip = trip,
-                    version = nextVersion,
-                    title = trip.name,
-                    subtitle = subtitle?.takeIf { it.isNotBlank() } ?: trip.destination,
-                    status = BookStatus.GENERATING,
-                    coverCountry = coverCountry?.takeIf { it.isNotBlank() }
-                )
+        val book = bookRepository.save(
+            Book(
+                trip = trip,
+                version = (latest?.version ?: 0) + 1,
+                title = trip.name,
+                subtitle = subtitle?.takeIf { it.isNotBlank() } ?: trip.destination,
+                status = BookStatus.GENERATING,
+                coverCountry = coverCountry?.takeIf { it.isNotBlank() }
             )
-        } catch (e: DataIntegrityViolationException) {
-            logger.warn("Concurrent generation for trip {} (v{}) — returning the in-flight book", tripId, nextVersion)
-            return bookRepository.findByTripIdOrderByVersionDesc(tripId).firstOrNull() ?: throw e
-        }
-        // Free-preview quota: the FIRST generation of a trip runs its (paid) photo analysis, and
-        // uploads are locked once a book exists, so a trip is analysed exactly once → charge only
-        // version 1. Out of previews → 402, which rolls back this transaction (and the insert above).
-        if (nextVersion == 1 && userRepository.tryConsumeFreePreview(userId) == 0) {
-            throw FreePreviewQuotaExceededException(userId)
-        }
+        )
         val bookId = book.id!!
         // Only kick off the worker once this book row is actually committed, so the
         // background thread's fresh transaction can find it.
@@ -96,14 +92,33 @@ class BookGenerationService(
     }
 
     /**
+     * Consumes one free preview for [trip]'s photo analysis, exactly once per trip. The reservation
+     * is durable ([Trip.previewChargedAt]) and held across retries/regenerations, so a
+     * failed-then-retried generation can't run paid analysis without a charge. Throws (→ 402) when
+     * the user is out of previews. Must be called while holding the trip's pessimistic lock.
+     */
+    private fun reservePreviewIfNeeded(trip: Trip, userId: UUID) {
+        if (trip.previewChargedAt != null) return // already reserved for this trip
+        if (userRepository.tryConsumeFreePreview(userId) == 0) throw FreePreviewQuotaExceededException(userId)
+        trip.previewChargedAt = java.time.Instant.now()
+        tripRepository.save(trip)
+    }
+
+    /**
      * Starts a regeneration asynchronously: creates a fresh GENERATING book that carries
      * the previous version's cover config forward, then processes it in the background.
      */
+    @Transactional
     fun startRegeneration(bookId: UUID, userId: UUID): Book {
         val existing = getBookForUser(bookId, userId)
-        val trip = existing.trip
-        val tripId = trip.id!!
+        val tripId = existing.trip.id!!
+        // Same per-trip lock as first generation, so a regeneration can't race another
+        // generation on the next version number.
+        val trip = tripRepository.findByIdForUpdate(tripId).orElseThrow { IllegalStateException("Trip not found: $tripId") }
         val nextVersion = (bookRepository.findByTripIdOrderByVersionDesc(tripId).firstOrNull()?.version ?: 0) + 1
+        // Normally a no-op (the trip was reserved at its first generation). Kept so a trip that
+        // somehow never reserved still can't regenerate free of charge.
+        reservePreviewIfNeeded(trip, userId)
         val book = bookRepository.save(
             Book(
                 trip = trip,
@@ -164,15 +179,10 @@ class BookGenerationService(
     /** Marks a book FAILED (its own transaction) so a failed background run is visible to the client. */
     @Transactional
     fun markFailed(bookId: UUID) {
-        // One-time GENERATING -> FAILED transition, so a repeated failure callback can't refund
-        // twice: only the call that actually flips the row proceeds to refund.
-        if (bookRepository.markFailedIfGenerating(bookId, BookStatus.GENERATING, BookStatus.FAILED) != 1) return
-        val book = bookRepository.findById(bookId).orElse(null) ?: return
-        // Don't charge a user's free quota for our own failure: refund the preview if the FIRST
-        // generation failed (only version 1 ever consumed one).
-        if (book.version == 1) {
-            book.trip.user?.id?.let { userRepository.refundFreePreview(it, FREE_PREVIEW_QUOTA) }
-        }
+        // One-time GENERATING -> FAILED transition (idempotent across repeated failure callbacks).
+        // No quota is refunded: the trip's preview reservation is durable and covers retries, so a
+        // failed-then-retried generation can't perform paid analysis without a charge.
+        bookRepository.markFailedIfGenerating(bookId, BookStatus.GENERATING, BookStatus.FAILED)
     }
 
     /**

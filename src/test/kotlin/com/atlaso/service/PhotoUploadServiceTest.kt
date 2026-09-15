@@ -91,6 +91,12 @@ class PhotoUploadServiceTest {
     }
 
     @Test
+    fun `confirm is rejected once a book exists (grant initiated before the book, confirmed after)`() {
+        whenever(bookRepo.existsByTripId(tripId)).thenReturn(true) // book was generated after the grant
+        assertThrows(IllegalArgumentException::class.java) { svc.confirmUploads(tripId, listOf(conf())) }
+    }
+
+    @Test
     fun `confirm rejects a photo that was never initiated`() {
         whenever(grantRepo.findByPhotoIdAndTripId(photoId, tripId)).thenReturn(null)
         assertThrows(IllegalArgumentException::class.java) { svc.confirmUploads(tripId, listOf(conf())) }

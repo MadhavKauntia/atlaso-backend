@@ -41,6 +41,12 @@ data class Trip(
     @Column(name = "guest_token_hash", length = 64)
     var guestTokenHash: String? = null,
 
+    // Set when a free preview is consumed for this trip's photo analysis. Durable and held across
+    // retries so a failed-then-retried generation can't run paid analysis without a charge; a paid
+    // order clears the user's allowance separately. Null = this trip hasn't reserved a preview.
+    @Column(name = "preview_charged_at")
+    var previewChargedAt: Instant? = null,
+
     @CreationTimestamp
     @Column(nullable = false, updatable = false, name = "created_at")
     val createdAt: Instant? = null,
