@@ -24,10 +24,14 @@ import javax.crypto.spec.SecretKeySpec
 class PaymentService(
     @Value("\${razorpay.key-id}") private val keyId: String,
     @Value("\${razorpay.key-secret}") private val keySecret: String,
+    @Value("\${razorpay.webhook-secret:}") private val webhookSecret: String,
     private val objectMapper: ObjectMapper,
 ) {
     private val logger = LoggerFactory.getLogger(PaymentService::class.java)
     private val http = OkHttpClient()
+
+    /** True when a webhook secret is configured — the webhook endpoint refuses requests otherwise. */
+    fun isWebhookConfigured(): Boolean = webhookSecret.isNotBlank()
 
     data class RazorpayOrder(val orderId: String, val amount: Long, val currency: String)
 
@@ -131,9 +135,23 @@ class PaymentService(
      * HMAC-SHA256 keyed by the secret. Comparison is constant-time.
      */
     fun verifySignature(orderId: String, paymentId: String, signature: String): Boolean {
+        return hmacMatches(keySecret, "$orderId|$paymentId", signature)
+    }
+
+    /**
+     * Verifies a webhook payload. Razorpay signs the **raw request body** with HMAC-SHA256 keyed
+     * by the dashboard-configured webhook secret (distinct from the API key secret), hex-encoded,
+     * delivered in the `X-Razorpay-Signature` header. Comparison is constant-time.
+     */
+    fun verifyWebhookSignature(rawBody: String, signature: String?): Boolean {
+        if (webhookSecret.isBlank() || signature.isNullOrBlank()) return false
+        return hmacMatches(webhookSecret, rawBody, signature)
+    }
+
+    private fun hmacMatches(secret: String, payload: String, signature: String): Boolean {
         val mac = Mac.getInstance("HmacSHA256")
-        mac.init(SecretKeySpec(keySecret.toByteArray(Charsets.UTF_8), "HmacSHA256"))
-        val digest = mac.doFinal("$orderId|$paymentId".toByteArray(Charsets.UTF_8))
+        mac.init(SecretKeySpec(secret.toByteArray(Charsets.UTF_8), "HmacSHA256"))
+        val digest = mac.doFinal(payload.toByteArray(Charsets.UTF_8))
         val expected = digest.joinToString("") { "%02x".format(it) }
         return MessageDigest.isEqual(
             expected.toByteArray(Charsets.UTF_8),

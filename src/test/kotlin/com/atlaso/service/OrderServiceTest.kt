@@ -51,26 +51,26 @@ class OrderServiceTest {
     @Test
     fun `rejects a payment that isn't captured`() {
         whenever(payment.fetchPayment(any())).thenReturn(pay(status = "authorized"))
-        assertThrows(PaymentVerificationException::class.java) { svc.recordPaidOrder(checkout(), "pay_1", null) }
+        assertThrows(PaymentVerificationException::class.java) { svc.recordPaidOrder(checkout(), "pay_1") }
     }
 
     @Test
     fun `rejects a payment bound to a different order`() {
         whenever(payment.fetchPayment(any())).thenReturn(pay(orderId = "order_OTHER"))
-        assertThrows(PaymentVerificationException::class.java) { svc.recordPaidOrder(checkout(), "pay_1", null) }
+        assertThrows(PaymentVerificationException::class.java) { svc.recordPaidOrder(checkout(), "pay_1") }
     }
 
     @Test
     fun `rejects underpayment`() {
         whenever(payment.fetchPayment(any())).thenReturn(pay(amount = expected - 1))
-        assertThrows(PaymentVerificationException::class.java) { svc.recordPaidOrder(checkout(), "pay_1", null) }
+        assertThrows(PaymentVerificationException::class.java) { svc.recordPaidOrder(checkout(), "pay_1") }
     }
 
     @Test
     fun `is idempotent — a replayed payment returns the existing order, no trip update`() {
         val existing = mock<Order>()
         whenever(orderRepo.findByRazorpayPaymentId("pay_1")).thenReturn(existing)
-        val result = svc.recordPaidOrder(checkout(), "pay_1", null)
+        val result = svc.recordPaidOrder(checkout(), "pay_1")
         assertSame(existing, result)
         verify(orderRepo, never()).save(any())
         verify(tripService, never()).updateStatus(any(), any())
@@ -87,7 +87,7 @@ class OrderServiceTest {
         whenever(receipt.render(any())).thenThrow(RuntimeException("skip email"))
         val c = checkout()
 
-        svc.recordPaidOrder(c, "pay_1", null)
+        svc.recordPaidOrder(c, "pay_1")
 
         verify(orderRepo).save(any<Order>())
         verify(tripService).updateStatus(tripId, TripStatus.ORDERED)

@@ -41,7 +41,7 @@ class PaymentControllerTest {
         whenever(paymentService.verifySignature("order_1", "pay_1", "sig")).thenReturn(false)
         val res = controller.verifyPayment(req(), jwt)
         assertEquals(400, res.statusCode.value())
-        verify(orderService, never()).recordPaidOrder(any(), any(), any())
+        verify(orderService, never()).recordPaidOrder(any(), any())
     }
 
     @Test
@@ -50,7 +50,7 @@ class PaymentControllerTest {
         whenever(checkoutRepo.findByRazorpayOrderId("order_1")).thenReturn(null)
         val res = controller.verifyPayment(req(), jwt)
         assertEquals(400, res.statusCode.value())
-        verify(orderService, never()).recordPaidOrder(any(), any(), any())
+        verify(orderService, never()).recordPaidOrder(any(), any())
     }
 
     @Test
@@ -59,7 +59,7 @@ class PaymentControllerTest {
         whenever(checkoutRepo.findByRazorpayOrderId("order_1")).thenReturn(checkout(owner = UUID.randomUUID()))
         val res = controller.verifyPayment(req(), jwt)
         assertEquals(403, res.statusCode.value())
-        verify(orderService, never()).recordPaidOrder(any(), any(), any())
+        verify(orderService, never()).recordPaidOrder(any(), any())
     }
 
     @Test
@@ -69,6 +69,6 @@ class PaymentControllerTest {
         whenever(checkoutRepo.findByRazorpayOrderId("order_1")).thenReturn(c)
         val res = controller.verifyPayment(req(), jwt)
         assertEquals(200, res.statusCode.value())
-        verify(orderService).recordPaidOrder(any(), any(), any())
+        verify(orderService).recordPaidOrder(any(), any())
     }
 }

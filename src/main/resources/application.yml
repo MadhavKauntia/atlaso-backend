@@ -63,6 +63,9 @@ openai:
 razorpay:
   key-id: "${RAZORPAY_KEY_ID:}"
   key-secret: "${RAZORPAY_KEY_SECRET:}"
+  # Dashboard-configured webhook signing secret (distinct from key-secret). Set on the
+  # Razorpay webhook subscribed to payment.captured; leaving it blank disables the webhook.
+  webhook-secret: "${RAZORPAY_WEBHOOK_SECRET:}"
 
 # Brevo transactional email
 brevo:
