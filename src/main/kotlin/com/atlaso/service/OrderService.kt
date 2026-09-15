@@ -10,6 +10,8 @@ import com.atlaso.repository.UserRepository
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import org.springframework.transaction.support.TransactionSynchronization
+import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.util.UUID
 
 private const val UNIT_PRICE_MINOR = Pricing.UNIT_PRICE_MINOR // Rs. 1999 in paise
@@ -27,7 +29,7 @@ class OrderService(
     private val paymentService: PaymentService,
     private val couponService: CouponService,
     private val receiptRenderer: ReceiptRenderer,
-    private val emailService: EmailService,
+    private val orderNotificationService: OrderNotificationService,
 ) {
     private val logger = LoggerFactory.getLogger(OrderService::class.java)
 
@@ -115,13 +117,29 @@ class OrderService(
         // Count the redemption against the coupon's usage cap — best-effort.
         coupon?.let { runCatching { couponService.recordRedemption(it) } }
 
-        // Best-effort order confirmation email with the receipt attached.
-        runCatching {
-            val receipt = receiptRenderer.render(saved)
-            emailService.sendOrderConfirmation(saved, receipt)
-        }.onFailure { logger.error("Order confirmation email failed for ATL-{}", saved.number, it) }
+        // Receipt render + confirmation email run AFTER commit, off the request thread — so the
+        // Razorpay webhook responds within its 5s budget and no email is sent for an order that
+        // ends up rolling back.
+        afterCommit { orderNotificationService.sendOrderConfirmation(saved) }
 
         return saved
+    }
+
+    /** The recorded order for a Razorpay payment id, if one exists. Used by the /verify and
+     *  webhook callers to distinguish "the other path already inserted this payment" from an
+     *  unrelated integrity failure after catching a DataIntegrityViolationException. */
+    fun findRecordedOrder(razorpayPaymentId: String): Order? =
+        orderRepository.findByRazorpayPaymentId(razorpayPaymentId)
+
+    /** Runs [action] after the current transaction commits (or immediately if none is active). */
+    private fun afterCommit(action: () -> Unit) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(object : TransactionSynchronization {
+                override fun afterCommit() = action()
+            })
+        } else {
+            action()
+        }
     }
 
     /** Generates the receipt PDF for the latest order on [tripId], owner-checked. */

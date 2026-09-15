@@ -52,16 +52,16 @@ data class Checkout(
     @Column(name = "address_line2", length = 255)
     val addressLine2: String? = null,
 
-    @Column(length = 120)
+    @Column(length = 128)
     val city: String? = null,
 
-    @Column(length = 120)
+    @Column(length = 128)
     val state: String? = null,
 
-    @Column(length = 16)
+    @Column(length = 32)
     val pincode: String? = null,
 
-    @Column(name = "ship_country", length = 80)
+    @Column(name = "ship_country", length = 64)
     val shipCountry: String? = null,
 
     @Column(length = 32)

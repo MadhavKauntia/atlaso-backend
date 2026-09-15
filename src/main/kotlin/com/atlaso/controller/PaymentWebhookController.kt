@@ -24,10 +24,11 @@ import org.springframework.web.bind.annotation.RestController
  * solely by the HMAC-SHA256 signature over the raw body in `X-Razorpay-Signature`, keyed by the
  * dashboard webhook secret. The endpoint is permitAll-ed in SecurityConfig.
  *
- * Response contract:
- *   200 — handled, duplicate, unknown order, or ignored event (stop retrying)
- *   400 — bad/missing signature or webhook not configured (won't be retried; misconfiguration)
- *   500 — transient failure recording the order (Razorpay should retry)
+ * Response contract (Razorpay retries ALL non-2xx responses for up to 24h):
+ *   200 — handled, duplicate, unknown order, or ignored event (final; stops retries)
+ *   400 — bad/missing signature or webhook not configured (a misconfiguration; Razorpay keeps
+ *         retrying until it's fixed, which is what we want — we just never act on it)
+ *   500 — transient failure recording the order (Razorpay retries; the retry should succeed)
  */
 @RestController
 @RequestMapping("/api/payments")
@@ -107,9 +108,19 @@ class PaymentWebhookController(
             )
             ResponseEntity.ok(mapOf("status" to "ok"))
         } catch (ex: DataIntegrityViolationException) {
-            // /verify (or a prior webhook delivery) already recorded this exact payment.
-            logger.info("Razorpay webhook: payment {} already recorded [event={}] — no-op", paymentId, trace)
-            ResponseEntity.ok(mapOf("status" to "ok: already recorded"))
+            // Could be /verify (or a prior delivery) recording this exact payment (fine), OR an
+            // unrelated constraint failure (no order). Only ack if the order actually exists;
+            // otherwise return 500 so Razorpay retries instead of silently dropping the payment.
+            if (orderService.findRecordedOrder(paymentId) != null) {
+                logger.info("Razorpay webhook: payment {} already recorded [event={}] — no-op", paymentId, trace)
+                ResponseEntity.ok(mapOf("status" to "ok: already recorded"))
+            } else {
+                logger.error(
+                    "Razorpay webhook: integrity violation with no recorded order [event={}, order={}, payment={}]: {}",
+                    trace, orderId, paymentId, ex.message,
+                )
+                ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(mapOf("error" to "could not record order"))
+            }
         } catch (ex: PaymentVerificationException) {
             // Could be transient (Razorpay fetch failed) — return 500 so Razorpay retries.
             logger.error(

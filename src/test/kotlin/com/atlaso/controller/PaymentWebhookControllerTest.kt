@@ -87,8 +87,21 @@ class PaymentWebhookControllerTest {
         whenever(paymentService.verifyWebhookSignature(any(), any())).thenReturn(true)
         whenever(checkoutRepo.findByRazorpayOrderId("order_1")).thenReturn(checkout())
         whenever(orderService.recordPaidOrder(any(), any())).thenThrow(DataIntegrityViolationException("dup"))
+        // The other path (or a prior delivery) inserted this exact payment — the order exists.
+        whenever(orderService.findRecordedOrder("pay_1")).thenReturn(mock<Order>())
         val res = controller.handleWebhook(capturedBody, "sig", "evt_1")
         assertEquals(200, res.statusCode.value())
+    }
+
+    @Test
+    fun `returns 500 when an integrity failure is not a duplicate`() {
+        whenever(paymentService.verifyWebhookSignature(any(), any())).thenReturn(true)
+        whenever(checkoutRepo.findByRazorpayOrderId("order_1")).thenReturn(checkout())
+        // An unrelated constraint failure — no order was recorded, so we must NOT ack.
+        whenever(orderService.recordPaidOrder(any(), any())).thenThrow(DataIntegrityViolationException("bad"))
+        whenever(orderService.findRecordedOrder("pay_1")).thenReturn(null)
+        val res = controller.handleWebhook(capturedBody, "sig", "evt_1")
+        assertEquals(500, res.statusCode.value())
     }
 
     @Test

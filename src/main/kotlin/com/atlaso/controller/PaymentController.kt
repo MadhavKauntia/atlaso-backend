@@ -49,6 +49,13 @@ class PaymentController(
         // Ownership — you can only pay for your own trip (throws → 404 if not).
         tripService.getTrip(request.tripId, userId)
 
+        // Validate shipping server-side BEFORE creating the Razorpay order — the webhook records
+        // an order straight from the Checkout, so an incomplete/invalid address must never make
+        // it to a payment. The client's own validation is not trusted.
+        val shipping = ShippingValidator.validate(request).getOrElse { ex ->
+            return ResponseEntity.badRequest().body(mapOf("error" to (ex.message ?: "Invalid shipping details")))
+        }
+
         val quantity = (request.quantity ?: 1).coerceIn(1, MAX_QUANTITY)
         // Price is computed here, server-side — the client cannot choose the amount.
         val listMinor = quantity * Pricing.UNIT_PRICE_MINOR
@@ -79,13 +86,13 @@ class PaymentController(
                     amountMinor = expectedCaptured,
                     currency = "INR",
                     couponCode = request.couponCode?.takeIf { it.isNotBlank() },
-                    addressLine1 = request.addressLine1?.ifBlank { null },
-                    addressLine2 = request.addressLine2?.ifBlank { null },
-                    city = request.city?.ifBlank { null },
-                    state = request.state?.ifBlank { null },
-                    pincode = request.pincode?.ifBlank { null },
-                    shipCountry = request.country?.ifBlank { null },
-                    phone = request.phone?.ifBlank { null },
+                    addressLine1 = shipping.addressLine1,
+                    addressLine2 = shipping.addressLine2,
+                    city = shipping.city,
+                    state = shipping.state,
+                    pincode = shipping.pincode,
+                    shipCountry = shipping.country,
+                    phone = shipping.phone,
                 )
             )
             ResponseEntity.ok(CreateOrderResponse(order.orderId, order.amount, order.currency))
@@ -139,9 +146,16 @@ class PaymentController(
             orderService.recordPaidOrder(checkout, paymentId)
             ResponseEntity.ok(mapOf("verified" to true))
         } catch (ex: DataIntegrityViolationException) {
-            // The webhook recorded this exact payment concurrently — the order still exists.
-            logger.info("Order for payment {} already recorded (concurrent webhook); treating as verified", paymentId)
-            ResponseEntity.ok(mapOf("verified" to true))
+            // Could be the webhook recording this exact payment concurrently (fine), OR an
+            // unrelated constraint failure (no order). Only report success if the order exists.
+            if (orderService.findRecordedOrder(paymentId) != null) {
+                logger.info("Order for payment {} already recorded (concurrent webhook); treating as verified", paymentId)
+                ResponseEntity.ok(mapOf("verified" to true))
+            } else {
+                logger.error("Order insert failed for payment {} with no recorded order: {}", paymentId, ex.message)
+                ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(mapOf("verified" to false, "error" to "We couldn't record your order. You have not been charged twice. Please contact support."))
+            }
         } catch (ex: PaymentVerificationException) {
             logger.warn("Payment verification failed for order {}: {}", orderId, ex.message)
             ResponseEntity.status(HttpStatus.BAD_REQUEST)
