@@ -3,13 +3,15 @@ WORKDIR /app
 # Copy only the build definition first, then resolve dependencies in a layer of their own.
 # This layer is cached and reused on every build where the build files are unchanged, so a
 # plain code change no longer re-downloads the whole dependency graph. The BuildKit cache
-# mount additionally persists ~/.gradle (dependency + build cache) across builds — Railway
-# supports RUN --mount=type=cache — so even a build-file change stays fast.
+# mount additionally persists ~/.gradle (dependency + build cache) across builds. Railway's
+# builder requires the cache id to be namespaced as s/<service-id>-<target> (hardcoded, no
+# env vars) — service id cedbef9c-d02c-4e81-b839-09c0cf6c054c; a plain BuildKit elsewhere
+# just treats it as an opaque string.
 COPY gradlew settings.gradle.kts build.gradle.kts ./
 COPY gradle gradle
-RUN --mount=type=cache,id=gradle,target=/root/.gradle ./gradlew dependencies --no-daemon || true
+RUN --mount=type=cache,id=s/cedbef9c-d02c-4e81-b839-09c0cf6c054c-/root/.gradle,target=/root/.gradle ./gradlew dependencies --no-daemon || true
 COPY src src
-RUN --mount=type=cache,id=gradle,target=/root/.gradle ./gradlew bootJar --no-daemon
+RUN --mount=type=cache,id=s/cedbef9c-d02c-4e81-b839-09c0cf6c054c-/root/.gradle,target=/root/.gradle ./gradlew bootJar --no-daemon
 
 FROM eclipse-temurin:21-jre
 RUN apt-get update && apt-get install -y imagemagick libheif-dev && rm -rf /var/lib/apt/lists/*
