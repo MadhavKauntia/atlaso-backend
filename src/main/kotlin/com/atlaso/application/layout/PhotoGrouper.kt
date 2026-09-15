@@ -209,11 +209,13 @@ class PhotoGrouper {
         val desired = minOf(available, (targetPages * FILL_RATIO).toInt())
         if (keptCount < desired && surplusIds.isNotEmpty()) {
             val need = desired - keptCount
-            // Pull back only strong surplus (the best near-duplicates) to fill the book —
-            // never weak shots, which stay omitted (req A).
+            // The book is a fixed [targetPages] pages, which needs at least one photo per page.
+            // When strong dedup left too few, pull back the best available surplus to reach that
+            // floor — prefer still-strong near-duplicates, but fall back to weaker ones rather than
+            // ship a short book. (Rich trips never reach here; they have plenty of distinct photos.)
             val addBack = episodes.flatten()
-                .filter { it.id in surplusIds && isGridWorthy(it) }
-                .sortedByDescending { scores[it.id] ?: 0.0 }
+                .filter { it.id in surplusIds }
+                .sortedWith(compareByDescending<Photo> { isGridWorthy(it) }.thenByDescending { scores[it.id] ?: 0.0 })
                 .take(need)
                 .mapNotNull { it.id }
                 .toHashSet()
