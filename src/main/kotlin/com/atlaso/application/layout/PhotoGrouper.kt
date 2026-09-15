@@ -51,10 +51,11 @@ class PhotoGrouper {
         // nearly as strong (within this fraction of the best).
         private const val DUP_KEEP_SECOND_RATIO = 0.85
 
-        // Book length is fixed at TARGET_PAGE_COUNT. When aggressive dedup + coverage
-        // leave too few photos to build a good book, we relax dedup (pull duplicates
-        // back) toward this many photos rather than padding with weak images.
-        private const val FILL_RATIO = 1.6
+        // Book length is fixed at TARGET_PAGE_COUNT. Duplicates are only pulled back as a LAST
+        // resort — when dedup leaves fewer than one distinct photo per page (targetPages). Above
+        // that we fill the 50 pages with larger layouts (more singles/pairs), never by re-adding
+        // near-duplicates. Ratio 1.0 = "only relax dedup to reach one photo per page."
+        private const val FILL_RATIO = 1.0
 
         // Grids are earned by quality, not subject (req A): a photo only joins a multi-photo
         // page if its aesthetic clears this bar. Weaker photos become solo pages instead of
@@ -181,15 +182,15 @@ class PhotoGrouper {
             ep.groupBy { dupSignature(it) }.forEach { (_, cluster) ->
                 val ranked = cluster.sortedByDescending { scores[it.id] ?: 0.0 }
                 kept.add(ranked[0])
-                if (ranked.size >= 2) {
-                    val best = scores[ranked[0].id] ?: 0.0
-                    val second = scores[ranked[1].id] ?: 0.0
-                    if (second >= best * DUP_KEEP_SECOND_RATIO) {
-                        kept.add(ranked[1])
-                        ranked.drop(2).forEach { it.id?.let(surplusIds::add) }
-                    } else {
-                        ranked.drop(1).forEach { it.id?.let(surplusIds::add) }
-                    }
+                // Keep a 2nd from the same dup-cluster ONLY when it is clearly distinct from the
+                // best (genuinely different content), never just because it scored nearly as high —
+                // that would keep a near-duplicate. True repeats collapse to one.
+                val second = ranked.getOrNull(1)
+                if (second != null && isClearlyDistinct(ranked[0], second)) {
+                    kept.add(second)
+                    ranked.drop(2).forEach { it.id?.let(surplusIds::add) }
+                } else {
+                    ranked.drop(1).forEach { it.id?.let(surplusIds::add) }
                 }
             }
 
@@ -239,6 +240,25 @@ class PhotoGrouper {
         }
         val place = s.locationTag ?: s.sceneType ?: "?"
         return "${s.subjectType}|${s.shotDistance}|$faces|$place"
+    }
+
+    /**
+     * Two photos in the same dup-cluster are "clearly distinct" only when their detected content
+     * genuinely differs (low object overlap) — e.g. two different dishes, or a subject vs its
+     * surroundings. Near-identical repeats have high overlap and are NOT distinct, so they collapse.
+     */
+    private fun isClearlyDistinct(a: Photo, b: Photo): Boolean {
+        val sa = a.signals ?: return false
+        val sb = b.signals ?: return false
+        return objectJaccard(sa.detectedObjects, sb.detectedObjects) < 0.6
+    }
+
+    private fun objectJaccard(a: List<String>, b: List<String>): Double {
+        if (a.isEmpty() || b.isEmpty()) return 0.0
+        val sa = a.map { it.lowercase() }.toSet()
+        val sb = b.map { it.lowercase() }.toSet()
+        val union = sa.union(sb).size.toDouble()
+        return if (union == 0.0) 0.0 else sa.intersect(sb).size / union
     }
 
     /**

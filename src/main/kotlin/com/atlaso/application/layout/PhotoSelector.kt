@@ -135,36 +135,28 @@ class PhotoSelector(
     }
 
     /**
-     * Phase 2: Detect bursts (rapid-fire shots) and keep only the best from each.
+     * Phase 2: Near-duplicate suppression. Collapses time-proximate, content-similar frames
+     * (the "let me take another" repeats — retries, sunset bursts, selfie runs) to their single
+     * best frame. Unlike a fixed burst window, a cluster extends as long as consecutive frames
+     * stay within [BurstConfig.timeWindowSeconds] of each other AND remain near-identical to the
+     * cluster anchor, so a series of near-dupes spread over a minute collapses too. A genuinely
+     * different shot (new subject/framing/objects) breaks the cluster and survives — so two
+     * distinct memories from the same spot both stay; only true repeats are dropped.
      */
     private fun dedupeBursts(photos: List<Photo>, config: BurstConfig): List<Photo> {
-        val bursts = detectBursts(photos, config)
-
-        logger.debug("Detected ${bursts.size} time-bursts")
-
-        val burstPhotoIds = bursts.flatMap { it.photos.map { p -> p.id } }.toSet()
-        val nonBurstPhotos = photos.filter { it.id !in burstPhotoIds }
-        // Only collapse frames within a burst that are ALSO semantically similar, so
-        // e.g. a wide beach shot and a close couple portrait taken seconds apart both
-        // survive, while three near-identical selfies collapse to the best one.
-        val keptFromBursts = bursts.flatMap { keepSemanticallyDistinct(it.photos) }
-
-        return nonBurstPhotos + keptFromBursts
-    }
-
-    /** Within a time-burst, keep the best frame of each run of semantically-similar shots. */
-    private fun keepSemanticallyDistinct(burstPhotos: List<Photo>): List<Photo> {
-        val sorted = burstPhotos.sortedBy { it.metadata.takenAt }
+        val sorted = photos.sortedWith(compareBy(nullsLast()) { it.metadata.takenAt })
         val kept = mutableListOf<Photo>()
         var cluster = mutableListOf<Photo>()
         fun flush() {
             if (cluster.isEmpty()) return
-            kept.add(cluster.maxByOrNull { it.signals?.aestheticScore ?: 0.0 } ?: cluster.first())
+            kept.add(cluster.maxByOrNull { rankScore(it) } ?: cluster.first())
             cluster = mutableListOf()
         }
         for (photo in sorted) {
-            // Compare against the cluster's anchor so a drifting sequence splits.
-            if (cluster.isEmpty() || isSemanticallySimilar(cluster.first(), photo)) {
+            val anchor = cluster.firstOrNull()
+            val prev = cluster.lastOrNull()
+            val closeInTime = prev != null && withinSeconds(prev, photo, config.timeWindowSeconds)
+            if (anchor == null || (closeInTime && isNearDuplicate(anchor, photo))) {
                 cluster.add(photo)
             } else {
                 flush()
@@ -175,7 +167,18 @@ class PhotoSelector(
         return kept
     }
 
-    private fun isSemanticallySimilar(a: Photo, b: Photo): Boolean {
+    private fun withinSeconds(a: Photo, b: Photo, seconds: Long): Boolean {
+        val ta = a.metadata.takenAt ?: return false
+        val tb = b.metadata.takenAt ?: return false
+        return kotlin.math.abs(Duration.between(ta, tb).seconds) <= seconds
+    }
+
+    /**
+     * True when [b] is a near-duplicate of [a]: same subject, framing, people, place, and a
+     * high overlap of detected objects. Deliberately strict so distinct shots from the same
+     * setting (a wide vs a close-up, two different dishes) are NOT merged.
+     */
+    private fun isNearDuplicate(a: Photo, b: Photo): Boolean {
         val sa = a.signals ?: return false
         val sb = b.signals ?: return false
         val sameLocation = sa.locationTag == sb.locationTag || sa.locationTag == null || sb.locationTag == null
@@ -183,7 +186,28 @@ class PhotoSelector(
             sa.shotDistance == sb.shotDistance &&
             sa.facesCount == sb.facesCount &&
             sameLocation &&
-            objectJaccard(sa.detectedObjects, sb.detectedObjects) >= 0.4
+            objectJaccard(sa.detectedObjects, sb.detectedObjects) >= 0.5
+    }
+
+    /** Static per-photo quality used for ranking within a dedup cluster or an event. */
+    private fun rankScore(photo: Photo): Double {
+        val s = photo.signals ?: return 0.0
+        val m = photo.metadata
+        val orientation = when (Orientation.from(m.width, m.height)) {
+            Orientation.LANDSCAPE -> 1.0
+            Orientation.PORTRAIT -> 0.7
+            Orientation.SQUARE -> 0.5
+        }
+        val lighting = when (s.timeOfDay) {
+            "golden_hour" -> 1.0
+            "day" -> 0.8
+            "night" -> 0.6
+            else -> 0.5
+        }
+        return s.aestheticScore * scoringWeights.aestheticWeight +
+            (1.0 - s.blurScore) * scoringWeights.sharpnessWeight +
+            orientation * scoringWeights.orientationPreference +
+            lighting * scoringWeights.lightingPreference
     }
 
     private fun objectJaccard(a: List<String>, b: List<String>): Double {
@@ -250,7 +274,14 @@ class PhotoSelector(
     }
 
     /**
-     * Phase 3 & 4: Score photos and select with diversity constraints.
+     * Phase 3: trim [photos] down to [DiversityConfig.targetPhotos] by activity/event.
+     *
+     * The book's category mix is NOT quota-driven — it simply reflects the trip. Instead we
+     * cluster into events (activities) and allocate slots **proportional to how much was shot at
+     * each**, with two guards: every event keeps at least [DiversityConfig.floorPerEvent] of its
+     * strongest shots (so no moment is ever dropped), and no event may exceed
+     * [DiversityConfig.maxEventShare] of the book (so one burst-heavy activity can't dominate).
+     * Photos are already near-dup-free from Phase 2, so an event's picks are distinct memories.
      */
     private fun selectPhotos(
         photos: List<Photo>,
@@ -258,100 +289,56 @@ class PhotoSelector(
         diversityConfig: DiversityConfig
     ): List<Photo> {
         val target = diversityConfig.targetPhotos
+        val events = clusterEvents(photos)
+        if (events.isEmpty()) return emptyList()
 
-        // Coverage guard: before any competition, reserve the strongest usable photo of
-        // every event so no activity is dropped just because it scored low. Only the
-        // remaining slots are then filled by the diversity-weighted competition below.
-        val reserved = if (coverageConfig.enabled) reserveCoveragePhotos(photos) else emptyList()
-        if (reserved.size >= target) {
-            logger.info("Coverage reservation ({}) meets/exceeds target ({}); keeping strongest per event", reserved.size, target)
-            return reserved.sortedByDescending { it.signals?.aestheticScore ?: 0.0 }.take(target)
+        // Per-event candidate pools, strongest first.
+        val pools = events.map { ev -> ev.sortedByDescending { rankScore(it) }.toMutableList() }
+        val totalPhotos = pools.sumOf { it.size }.coerceAtLeast(1)
+        val capAbs = (target * diversityConfig.maxEventShare).toInt().coerceAtLeast(diversityConfig.floorPerEvent)
+
+        val allocated = IntArray(pools.size)
+        val selected = mutableListOf<Photo>()
+        fun take(i: Int) { selected.add(pools[i].removeAt(0)); allocated[i]++ }
+
+        // 1. Coverage floor — guarantee each event's strongest few first (no activity dropped).
+        for (i in pools.indices) {
+            repeat(minOf(diversityConfig.floorPerEvent, pools[i].size)) { if (selected.size < target) take(i) }
         }
-
-        val selected = reserved.toMutableList()
-        val reservedIds = reserved.mapNotNull { it.id }.toHashSet()
-        val sceneTypeCounts = mutableMapOf<String?, Int>()
-        val timeOfDayCounts = mutableMapOf<String?, Int>()
-        // Seed diversity counters with the reserved photos so quotas account for them.
-        reserved.forEach { p ->
-            sceneTypeCounts[p.signals?.sceneType] = (sceneTypeCounts[p.signals?.sceneType] ?: 0) + 1
-            timeOfDayCounts[p.signals?.timeOfDay] = (timeOfDayCounts[p.signals?.timeOfDay] ?: 0) + 1
-        }
-        logger.info("Coverage reserved {} photos across events before competition", reserved.size)
-
-        // Calculate target counts per category
-        val sceneTargets = diversityConfig.sceneTypeTargets.mapValues { (_, ratio) ->
-            (target * ratio).toInt()
-        }
-
-        logger.debug("Scene targets: $sceneTargets")
-
-        // Score the remaining (non-reserved) photos initially
-        var scoredPhotos = photos.filter { it.id !in reservedIds }.map { photo ->
-            scorePhoto(photo, weights, sceneTypeCounts, timeOfDayCounts)
-        }.sortedByDescending { it.totalScore }
-
-        // Pass 1: diversity-constrained selection
-        val skippedByQuota = mutableListOf<Photo>()
-        while (selected.size < diversityConfig.targetPhotos && scoredPhotos.isNotEmpty()) {
-            val nextPhoto = scoredPhotos.first()
-            val signals = nextPhoto.photo.signals!!
-
-            val sceneCount = sceneTypeCounts[signals.sceneType] ?: 0
-            val sceneTarget = sceneTargets[signals.sceneType] ?: 3
-
-            if (sceneCount < sceneTarget) {
-                selected.add(nextPhoto.photo)
-                sceneTypeCounts[signals.sceneType] = sceneCount + 1
-                timeOfDayCounts[signals.timeOfDay] = (timeOfDayCounts[signals.timeOfDay] ?: 0) + 1
-
-                logger.debug("Selected photo ${nextPhoto.photo.id} (score: ${nextPhoto.totalScore}, scene: ${signals.sceneType})")
-
-                scoredPhotos = scoredPhotos.drop(1).map { photoScore ->
-                    scorePhoto(photoScore.photo, weights, sceneTypeCounts, timeOfDayCounts)
-                }.sortedByDescending { it.totalScore }
-            } else {
-                logger.debug("Deferred photo ${nextPhoto.photo.id} (quota reached for ${signals.sceneType})")
-                skippedByQuota.add(nextPhoto.photo)
-                scoredPhotos = scoredPhotos.drop(1)
+        // 2. Fill the rest proportionally: each remaining slot goes to the event that is most under
+        //    its fair (proportional) share and still has distinct photos left below the cap.
+        while (selected.size < target) {
+            var bestI = -1
+            var bestDeficit = Double.NEGATIVE_INFINITY
+            for (i in pools.indices) {
+                if (pools[i].isEmpty() || allocated[i] >= minOf(capAbs, events[i].size)) continue
+                val fairShare = target.toDouble() * events[i].size / totalPhotos
+                val deficit = (fairShare - allocated[i]) / maxOf(1.0, fairShare)
+                if (deficit > bestDeficit) { bestDeficit = deficit; bestI = i }
             }
+            if (bestI < 0) break // everything left is over its cap
+            take(bestI)
         }
 
-        // Pass 2: fill remaining slots with best skipped photos when target scene types were absent
-        if (selected.size < diversityConfig.targetPhotos && skippedByQuota.isNotEmpty()) {
-            val remaining = diversityConfig.targetPhotos - selected.size
-            val fillPhotos = skippedByQuota
-                .map { scorePhoto(it, weights, sceneTypeCounts, timeOfDayCounts) }
-                .sortedByDescending { it.totalScore }
-                .take(remaining)
-            fillPhotos.forEach { logger.debug("Fill-selected photo ${it.photo.id} (scene: ${it.photo.signals?.sceneType})") }
-            selected.addAll(fillPhotos.map { it.photo })
-        }
-
+        logger.info("Event allocation: {} events, {} photos selected (target {})", events.size, selected.size, target)
         return selected
     }
 
     /**
-     * Clusters photos into events (activities) and returns the single strongest usable
-     * photo from each — the coverage set. An event boundary is a large time gap or a
-     * location change, a lightweight proxy for the grouper's episode detection. This runs
-     * only on large trips (inside [selectPhotos]); smaller trips keep every photo anyway.
+     * Clusters photos into events/activities in chronological order. An event boundary is a large
+     * time gap or a location change — a lightweight proxy for the grouper's episode detection.
      */
-    private fun reserveCoveragePhotos(photos: List<Photo>): List<Photo> {
+    private fun clusterEvents(photos: List<Photo>): List<List<Photo>> {
         if (photos.isEmpty()) return emptyList()
         val sorted = photos.sortedWith(compareBy(nullsLast()) { it.metadata.takenAt })
         val events = mutableListOf<MutableList<Photo>>()
         var current = mutableListOf<Photo>()
         for (photo in sorted) {
-            if (current.isEmpty() || !isNewEvent(current.last(), photo)) {
-                current.add(photo)
-            } else {
-                events.add(current)
-                current = mutableListOf(photo)
-            }
+            if (current.isEmpty() || !isNewEvent(current.last(), photo)) current.add(photo)
+            else { events.add(current); current = mutableListOf(photo) }
         }
         if (current.isNotEmpty()) events.add(current)
-        return events.mapNotNull { ev -> ev.maxByOrNull { it.signals?.aestheticScore ?: 0.0 } }
+        return events
     }
 
     /** True when [b] begins a new event relative to [a]: a big time gap or a place change. */
@@ -485,10 +472,12 @@ data class QualityThresholds(
 )
 
 /**
- * Configuration for burst detection.
+ * Configuration for near-duplicate suppression. [timeWindowSeconds] is the max gap between
+ * consecutive frames for them to stay in one near-dup cluster — wide enough to catch a series of
+ * "let me take another" repeats spread over a minute or two, not just a sub-10s burst.
  */
 data class BurstConfig(
-    val timeWindowSeconds: Long = 10
+    val timeWindowSeconds: Long = 90
 )
 
 /**
@@ -509,22 +498,15 @@ data class ScoringWeights(
 )
 
 /**
- * Configuration for diversity-aware selection.
+ * Configuration for event-proportional selection. There are no scene-type quotas — the category
+ * mix reflects the actual trip; these only control how book slots spread across activities.
  */
 data class DiversityConfig(
     val targetPhotos: Int = 30,
-    val sceneTypeTargets: Map<String, Double> = mapOf(
-        "people" to 0.30,
-        "landscape" to 0.35,
-        "city" to 0.15,
-        "food" to 0.10,
-        "misc" to 0.10
-    ),
-    val timeTargets: Map<String, Double> = mapOf(
-        "day" to 0.60,
-        "golden_hour" to 0.25,
-        "night" to 0.15
-    )
+    // Every activity/event keeps at least this many of its strongest shots, so no moment is dropped.
+    val floorPerEvent: Int = 1,
+    // No single event may exceed this fraction of the book, so one burst-heavy activity can't dominate.
+    val maxEventShare: Double = 0.22
 )
 
 /**

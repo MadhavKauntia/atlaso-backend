@@ -18,43 +18,44 @@ class PhotoSelectorTest {
         status = TripStatus.READY_FOR_BOOK_GENERATION
     )
 
+    // Distinct, spread-out, near-dup-free photos — enough to keep the selector off its
+    // small-trip fallback (which relaxes every filter to reach the page minimum).
+    private fun distinctPadding(n: Int, base: Instant = Instant.parse("2025-10-12T09:00:00Z")): List<Photo> =
+        (1..n).map { i ->
+            createPhoto(aestheticScore = 0.7, blurScore = 0.1, sceneType = "landscape",
+                detectedObjects = listOf("scene-$i"), takenAt = base.plusSeconds(600L * i))
+        }
+
     @Test
     fun `should filter out photos with low aesthetic score`() {
-        val photos = listOf(
-            createPhoto(aestheticScore = 0.8, blurScore = 0.2),  // Good
-            createPhoto(aestheticScore = 0.3, blurScore = 0.2),  // Low aesthetic
-            createPhoto(aestheticScore = 0.6, blurScore = 0.2)   // Good
-        )
+        val bad = createPhoto(aestheticScore = 0.3, blurScore = 0.2, detectedObjects = listOf("dim"),
+            takenAt = Instant.parse("2025-10-12T20:00:00Z"))
 
-        val result = selector.selectPhotosForBook(photos)
+        val result = selector.selectPhotosForBook(distinctPadding(55) + bad)
 
-        // Should filter out the photo with aesthetic 0.3
-        assertTrue(result.photos.size < 3)
+        assertTrue(result.photos.none { it.id == bad.id }, "low-aesthetic photo should be dropped")
         assertTrue(result.photos.all { it.signals!!.aestheticScore >= 0.4 })
     }
 
     @Test
     fun `should filter out blurry photos`() {
-        val photos = listOf(
-            createPhoto(aestheticScore = 0.8, blurScore = 0.2),  // Sharp
-            createPhoto(aestheticScore = 0.8, blurScore = 0.8),  // Blurry
-            createPhoto(aestheticScore = 0.8, blurScore = 0.5)   // Acceptable
-        )
+        val blurry = createPhoto(aestheticScore = 0.8, blurScore = 0.8, detectedObjects = listOf("smear"),
+            takenAt = Instant.parse("2025-10-12T20:00:00Z"))
 
-        val result = selector.selectPhotosForBook(photos)
+        val result = selector.selectPhotosForBook(distinctPadding(55) + blurry)
 
-        // Should filter out the photo with blur 0.8
+        assertTrue(result.photos.none { it.id == blurry.id }, "blurry photo should be dropped")
         assertTrue(result.photos.all { it.signals!!.blurScore <= 0.6 })
     }
 
     @Test
     fun `should filter out documentary shots (menus, receipts, signage)`() {
-        // Enough usable photos that the selector doesn't relax filters to hit the page minimum;
-        // spaced out in time so burst dedup doesn't confound the assertion.
+        // Enough DISTINCT usable photos that the selector doesn't relax filters to hit the page
+        // minimum. Each filler has a unique object so near-dup suppression doesn't collapse them.
         val base = Instant.parse("2025-10-12T09:00:00Z")
-        val filler = (1..55).map { i ->
+        val filler = (1..60).map { i ->
             createPhoto(aestheticScore = 0.7, blurScore = 0.1, sceneType = "landscape",
-                detectedObjects = listOf("beach", "ocean"), takenAt = base.plusSeconds(60L * i))
+                detectedObjects = listOf("beach", "landmark-$i"), takenAt = base.plusSeconds(600L * i))
         }
         val menu = createPhoto(aestheticScore = 0.7, blurScore = 0.1, sceneType = "food",
             detectedObjects = listOf("menu", "hand", "text"), takenAt = base.plusSeconds(4000))
@@ -73,39 +74,17 @@ class PhotoSelectorTest {
 
     @Test
     fun `should detect and dedupe photo bursts`() {
-        val baseTime = Instant.now()
+        val base = Instant.parse("2025-10-12T09:00:00Z")
+        // Three near-identical frames seconds apart (same content) → collapse to the best (0.9).
+        val b1 = createPhoto(aestheticScore = 0.7, blurScore = 0.2, detectedObjects = listOf("temple", "statue"), takenAt = base)
+        val b2 = createPhoto(aestheticScore = 0.9, blurScore = 0.2, detectedObjects = listOf("temple", "statue"), takenAt = base.plusSeconds(3))
+        val b3 = createPhoto(aestheticScore = 0.8, blurScore = 0.2, detectedObjects = listOf("temple", "statue"), takenAt = base.plusSeconds(7))
+        // Padding well after the burst so it's a separate, distinct event.
+        val result = selector.selectPhotosForBook(distinctPadding(55, base.plusSeconds(3600)) + listOf(b1, b2, b3))
 
-        val photos = listOf(
-            // Burst 1: 3 photos within 10 seconds
-            createPhoto(
-                aestheticScore = 0.7,
-                blurScore = 0.2,
-                takenAt = baseTime
-            ),
-            createPhoto(
-                aestheticScore = 0.9,  // Best in burst
-                blurScore = 0.2,
-                takenAt = baseTime.plusSeconds(3)
-            ),
-            createPhoto(
-                aestheticScore = 0.8,
-                blurScore = 0.2,
-                takenAt = baseTime.plusSeconds(7)
-            ),
-            // Separate photo
-            createPhoto(
-                aestheticScore = 0.8,
-                blurScore = 0.2,
-                takenAt = baseTime.plusSeconds(60)
-            )
-        )
-
-        val result = selector.selectPhotosForBook(photos)
-
-        // Should keep best from burst + the separate photo
-        assertEquals(2, result.photos.size)
-        // Best photo from burst should be the one with 0.9 aesthetic
-        assertTrue(result.photos.any { it.signals!!.aestheticScore == 0.9 })
+        val burstIds = listOfNotNull(b1.id, b2.id, b3.id)
+        assertEquals(1, result.photos.count { it.id in burstIds }, "burst should collapse to one frame")
+        assertTrue(result.photos.any { it.signals!!.aestheticScore == 0.9 }, "the best burst frame should survive")
     }
 
     @Test
