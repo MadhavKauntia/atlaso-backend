@@ -48,6 +48,30 @@ class PhotoSelectorTest {
     }
 
     @Test
+    fun `should filter out documentary shots (menus, receipts, signage)`() {
+        // Enough usable photos that the selector doesn't relax filters to hit the page minimum;
+        // spaced out in time so burst dedup doesn't confound the assertion.
+        val base = Instant.parse("2025-10-12T09:00:00Z")
+        val filler = (1..55).map { i ->
+            createPhoto(aestheticScore = 0.7, blurScore = 0.1, sceneType = "landscape",
+                detectedObjects = listOf("beach", "ocean"), takenAt = base.plusSeconds(60L * i))
+        }
+        val menu = createPhoto(aestheticScore = 0.7, blurScore = 0.1, sceneType = "food",
+            detectedObjects = listOf("menu", "hand", "text"), takenAt = base.plusSeconds(4000))
+        val receipt = createPhoto(aestheticScore = 0.7, blurScore = 0.1, sceneType = "misc",
+            detectedObjects = listOf("receipt"), takenAt = base.plusSeconds(4100))
+        // "texture" must NOT be caught by the "text" exclusion (token match, not substring).
+        val texture = createPhoto(aestheticScore = 0.7, blurScore = 0.1, sceneType = "landscape",
+            detectedObjects = listOf("texture", "wall"), takenAt = base.plusSeconds(4200))
+
+        val result = selector.selectPhotosForBook(filler + listOf(menu, receipt, texture))
+
+        assertTrue(result.photos.none { it.id == menu.id }, "menu shot should be dropped")
+        assertTrue(result.photos.none { it.id == receipt.id }, "receipt shot should be dropped")
+        assertTrue(result.photos.any { it.id == texture.id }, "'texture' must not be caught by 'text'")
+    }
+
+    @Test
     fun `should detect and dedupe photo bursts`() {
         val baseTime = Instant.now()
 
@@ -250,7 +274,8 @@ class PhotoSelectorTest {
         timeOfDay: String = "day",
         width: Int = 4000,
         height: Int = 3000,
-        takenAt: Instant? = Instant.now()
+        takenAt: Instant? = Instant.now(),
+        detectedObjects: List<String> = emptyList()
     ): Photo {
         return Photo(
             id = UUID.randomUUID(),
@@ -271,7 +296,7 @@ class PhotoSelectorTest {
                 blurScore = blurScore,
                 timeOfDay = timeOfDay,
                 facesCount = 0,
-                detectedObjects = emptyList(),
+                detectedObjects = detectedObjects,
                 isBlurry = blurScore > 0.5,
                 dominantColors = emptyList()
             )

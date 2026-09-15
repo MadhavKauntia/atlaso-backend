@@ -101,6 +101,10 @@ class PhotoSelector(
             val passesBlur = signals.blurScore <= thresholds.maxBlurScore
             val passesDimension = metadata.width >= thresholds.minDimension &&
                                  metadata.height >= thresholds.minDimension
+            // Drop documentary shots (menus, receipts, tickets, signage, screenshots…) — the
+            // vision model labels them a real scene (often "food"), and their sharpness can
+            // otherwise ride them into the book over more photogenic images.
+            val excludedObject = signals.detectedObjects.firstOrNull { matchesExcludedObject(it, thresholds.excludedObjectTags) }
 
             if (!passesAesthetic) {
                 logger.debug("Filtered ${photo.id}: aesthetic ${signals.aestheticScore} < ${thresholds.minAestheticScore}")
@@ -111,9 +115,23 @@ class PhotoSelector(
             if (!passesDimension) {
                 logger.debug("Filtered ${photo.id}: dimensions ${metadata.width}x${metadata.height}")
             }
+            if (excludedObject != null) {
+                logger.debug("Filtered ${photo.id}: documentary object '$excludedObject'")
+            }
 
-            passesAesthetic && passesBlur && passesDimension
+            passesAesthetic && passesBlur && passesDimension && excludedObject == null
         }
+    }
+
+    /**
+     * True when a detected-object label is a documentary/non-photogenic subject we exclude.
+     * Matches whole word-tokens for single-word tags (so "text" won't hit "texture") and
+     * substring for multi-word tags (e.g. "boarding pass").
+     */
+    private fun matchesExcludedObject(label: String, excluded: Set<String>): Boolean {
+        val tag = label.lowercase().trim()
+        val tokens = tag.split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }.toHashSet()
+        return excluded.any { ex -> if (ex.contains(' ')) tag.contains(ex) else tokens.contains(ex) }
     }
 
     /**
@@ -450,7 +468,20 @@ class PhotoSelector(
 data class QualityThresholds(
     val minAestheticScore: Double = 0.4,
     val maxBlurScore: Double = 0.6,
-    val minDimension: Int = 1200
+    val minDimension: Int = 1200,
+    // Documentary / non-photogenic subjects to drop outright. Single-word entries match whole
+    // tokens; multi-word entries match as a substring. Deliberately excludes bare "sign",
+    // "phone", "book" — those are too often legitimate travel/candid shots.
+    val excludedObjectTags: Set<String> = setOf(
+        // menus & receipts
+        "menu", "receipt",
+        // text & documents
+        "text", "screenshot", "document", "whiteboard", "qr code",
+        // printed signage
+        "signage", "poster", "brochure", "price tag", "label",
+        // travel paperwork
+        "ticket", "boarding pass", "passport", "booking"
+    )
 )
 
 /**
@@ -465,12 +496,16 @@ data class BurstConfig(
  * All weights should sum to ~1.0 for normalized scores.
  */
 data class ScoringWeights(
-    val aestheticWeight: Double = 0.50,
-    val sharpnessWeight: Double = 0.20,
-    val sceneVarietyBonus: Double = 0.10,
+    // Aesthetics now dominate (was 0.50) so a merely-sharp/well-oriented but plain shot can't
+    // ride secondary factors into the book. Remaining weights rebalanced to keep the sum at 1.0,
+    // pulling mostly from sharpness + orientation (the factors that previously over-rewarded
+    // crisp documentary photos).
+    val aestheticWeight: Double = 0.65,
+    val sharpnessWeight: Double = 0.12,
+    val sceneVarietyBonus: Double = 0.09,
     val timeVarietyBonus: Double = 0.05,
-    val orientationPreference: Double = 0.10,
-    val lightingPreference: Double = 0.05
+    val orientationPreference: Double = 0.05,
+    val lightingPreference: Double = 0.04
 )
 
 /**
