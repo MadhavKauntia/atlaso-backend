@@ -22,6 +22,12 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
         private const val PAGE_ASPECT = 6.9 / 9.8
         // Below this cover-fit visible fraction, full-bleed would crop too hard → frame it.
         private const val CROP_SAFE_MIN = 0.62
+        // Bookend passes scan this many pages from each end — wider than a single spread so the
+        // best opener/closer isn't missed (bookends matter enough to bend strict chronology).
+        private const val OPENING_WINDOW = 8
+        private const val CLOSING_WINDOW = 8
+        // A single below this keepsake score is too weak to sit in the opening spread.
+        private const val OPENING_KEEPSAKE_FLOOR = 0.5
     }
 
     fun generatePages(photos: List<Photo>): List<Page> {
@@ -71,18 +77,14 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
         // Req 2: no layout repeated on more than 2 consecutive pages (windowed reorder).
         breakLayoutRuns(planned, allowSwap = true)
 
-        // Opening: prefer an establishing/arrival single at the front (movable pages only).
-        if (planned.isNotEmpty() && !isEstablishing(planned[0])) {
-            val idx = (1 until minOf(4, planned.size)).firstOrNull { isEstablishing(planned[it]) && isMovable(planned, it) }
-            if (idx != null) planned.add(0, planned.removeAt(idx))
-        }
+        // Opening bookend (#1,#4): lead with the STRONGEST establishing/arrival single — scanning
+        // a wide early window, never an object/misc shot. The cover follows page 1, so this also
+        // curates the cover.
+        openWithStrongestEstablishing(planned)
 
-        // Ending: prefer a quiet/scenic single at the end (movable pages only).
-        if (planned.size >= 2 && !isQuiet(planned.last())) {
-            val from = maxOf(0, planned.size - 4)
-            val idx = (from until planned.size - 1).lastOrNull { isQuiet(planned[it]) && isMovable(planned, it) }
-            if (idx != null) planned.add(planned.removeAt(idx))
-        }
+        // Opening bookend (#2): keep the first three pages clean — swap out any low-narrative
+        // object/misc or weak-keepsake single (a stray souvenir shot is most jarring up front).
+        curateOpeningPages(planned)
 
         // People early: establish who took the trip. Guarantee a page featuring people
         // within the first three, pulling the earliest one up if none is present.
@@ -97,6 +99,11 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
 
         // Req B: pull same-event pairs onto a single spread so events aren't split by a turn.
         avoidEventTurnBreaks(planned)
+
+        // Closing bookend (#3,#4): end on a calm single — guarantee the last page is a single and
+        // prefer the strongest quiet/scenic shot from a wide tail window. Runs after the reorder
+        // passes so it has the final say on the last page.
+        curateClosingPage(planned)
 
         // Req 2 (touch-up): reordering above may have re-created a run of identical
         // layouts. Break any remaining runs in place (layout-variant flips only) so we
@@ -331,6 +338,84 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
         val s = p.group.photos[0].signals ?: return false
         return s.mood == "serene" || s.shotDistance == "closeup" ||
             s.subjectType == "landscape" || s.settingScope == "environment"
+    }
+
+    // ─── Narrative bookends (open strong / establishing, close calm / scenic) ──────
+
+    /**
+     * (#1,#4) Put the strongest establishing/arrival single at page 1. Scans a wide early window
+     * and picks the highest-scoring establishing single (excluding object/misc shots), so the book
+     * — and its cover, which follows page 1 — opens on a striking "here's the place" image rather
+     * than merely the earliest photo. Movable pages only, and only when the current opener isn't
+     * already a strong establishing single.
+     */
+    private fun openWithStrongestEstablishing(planned: MutableList<Planned>) {
+        if (planned.size < 2 || isStrongEstablishing(planned[0])) return
+        val window = minOf(OPENING_WINDOW, planned.size)
+        val idx = (1 until window)
+            .filter { isStrongEstablishing(planned[it]) && isMovable(planned, it) }
+            .maxByOrNull { openingStrength(planned[it]) } ?: return
+        planned.add(0, planned.removeAt(idx))
+    }
+
+    /**
+     * (#2) Guard the opening spread: no low-narrative object/misc single, and no weak-keepsake
+     * single, in the first three pages — that is where a stray souvenir/product shot is most
+     * jarring. Swap any such page for the strongest non-weak single from just after it.
+     */
+    private fun curateOpeningPages(planned: MutableList<Planned>) {
+        val protect = minOf(3, planned.size)
+        for (i in 0 until protect) {
+            if (!isWeakOpeningSingle(planned[i]) || !isMovable(planned, i)) continue
+            val j = (protect until minOf(OPENING_WINDOW, planned.size))
+                .filter { isSingle(planned[it]) && !isWeakOpeningSingle(planned[it]) && isMovable(planned, it) }
+                .maxByOrNull { openingStrength(planned[it]) } ?: continue
+            val tmp = planned[i]; planned[i] = planned[j]; planned[j] = tmp
+        }
+    }
+
+    /**
+     * (#3,#4) Close the book on a calm single. Prefer the strongest quiet/scenic single from a
+     * wide tail window; if the last page is a multi-photo collage, fall back to the strongest
+     * plain single so the book at least ends on a single rather than a busy grid. Movable pages
+     * only, so no event is split.
+     */
+    private fun curateClosingPage(planned: MutableList<Planned>) {
+        if (planned.size < 2) return
+        val last = planned.size - 1
+        if (isQuiet(planned[last])) return
+        val range = maxOf(1, planned.size - CLOSING_WINDOW) until last
+        val quiet = range.filter { isQuiet(planned[it]) && isMovable(planned, it) }
+            .maxByOrNull { openingStrength(planned[it]) }
+        val pick = quiet ?: if (!isSingle(planned[last])) {
+            range.filter { isSingle(planned[it]) && isMovable(planned, it) }
+                .maxByOrNull { openingStrength(planned[it]) }
+        } else null
+        if (pick != null) planned.add(planned.removeAt(pick))
+    }
+
+    private fun isSingle(p: Planned): Boolean = p.group.photos.size == 1
+
+    /** Bookend strength: aesthetic + memorability of the (featured) photo, range 0–2. */
+    private fun openingStrength(p: Planned): Double {
+        val s = p.group.photos.firstOrNull()?.signals ?: return 0.0
+        return s.aestheticScore + s.keepsakeInterest
+    }
+
+    /** A single-photo page whose subject is a low-narrative object / uncategorised misc shot. */
+    private fun isObjectOrMiscSingle(p: Planned): Boolean {
+        if (p.group.photos.size != 1) return false
+        val s = p.group.photos[0].signals ?: return false
+        return s.subjectType == "object" || s.sceneType == "misc"
+    }
+
+    private fun isStrongEstablishing(p: Planned): Boolean = isEstablishing(p) && !isObjectOrMiscSingle(p)
+
+    /** A single unfit to lead the book: a low-narrative object/misc shot or a weak-keepsake one. */
+    private fun isWeakOpeningSingle(p: Planned): Boolean {
+        if (p.group.photos.size != 1) return false
+        val s = p.group.photos[0].signals ?: return false
+        return s.subjectType == "object" || s.sceneType == "misc" || s.keepsakeInterest < OPENING_KEEPSAKE_FLOOR
     }
 
     // ─── Layout choice: count + orientation + standalone + shot/scope + crop + prev ───

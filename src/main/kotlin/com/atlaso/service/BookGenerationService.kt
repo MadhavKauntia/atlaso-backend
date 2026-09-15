@@ -119,9 +119,13 @@ class BookGenerationService(
         logger.info("Selected {} photos for book {}", selectionResult.photos.size, bookId)
 
         val book = bookRepository.findById(bookId).orElseThrow { BookNotFoundException(bookId) }
-        book.coverPhoto = selectionResult.photos.firstOrNull()
 
         val pages = layoutEngine.generatePages(selectionResult.photos)
+        // The cover follows the curated opener (page 1's featured photo) so it's the book's
+        // strongest arrival shot, not merely the earliest photo. Falls back to first chronological.
+        val openerPhotoId = pages.firstOrNull()?.slots?.firstOrNull()?.photoId
+        book.coverPhoto = openerPhotoId?.let { id -> selectionResult.photos.firstOrNull { it.id == id } }
+            ?: selectionResult.photos.firstOrNull()
         pages.forEach { page -> book.addPage(page) }
 
         book.status = BookStatus.READY_FOR_PREVIEW
