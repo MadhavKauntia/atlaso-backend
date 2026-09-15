@@ -41,16 +41,6 @@ data class ConfirmUploadRequest(
     val thumbnailStorageKey: String? = null
 )
 
-data class BulkUploadResponse(
-    val uploaded: List<PhotoResponse>,
-    val failed: List<BulkUploadFailure>
-)
-
-data class BulkUploadFailure(
-    val filename: String,
-    val error: String
-)
-
 data class PhotoResponse(
     val id: UUID,
     val tripId: UUID,

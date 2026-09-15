@@ -13,19 +13,14 @@ import com.atlaso.repository.TripRepository
 import com.atlaso.repository.UploadGrantRepository
 import com.drew.imaging.ImageMetadataReader
 import com.drew.metadata.Metadata
-import com.drew.metadata.exif.ExifSubIFDDirectory
-import com.drew.metadata.exif.GpsDirectory
 import com.drew.metadata.file.FileTypeDirectory
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
-import org.springframework.web.multipart.MultipartFile
 import java.io.ByteArrayInputStream
-import java.nio.file.Files
 import java.time.Duration
 import java.time.Instant
 import java.util.UUID
-import java.util.concurrent.TimeUnit
 import javax.imageio.ImageIO
 
 class PhotoNotFoundException(id: UUID) : RuntimeException("Photo not found: $id")
@@ -42,15 +37,14 @@ class PhotoUploadService(
     private val logger = LoggerFactory.getLogger(PhotoUploadService::class.java)
 
     companion object {
+        // Presigned uploads are restricted to formats the JVM can actually decode (JPEG/PNG) so
+        // confirmation can prove the pixel stream is valid and PDF export can render it. The client
+        // already transcodes HEIC/WebP to JPEG before requesting a presigned URL, so this rejects
+        // nothing legitimate while keeping undecodable formats out of the pipeline.
         val ALLOWED_CONTENT_TYPES = setOf(
             "image/jpeg",
-            "image/png",
-            "image/webp",
-            "image/heic",
-            "image/heif"
+            "image/png"
         )
-
-        private val HEIC_CONTENT_TYPES = setOf("image/heic", "image/heif")
 
         /** Caps that protect storage and (mainly) per-book vision-analysis cost. Deliberately
          *  generous — trips may hold many large DSLR-quality images. */
@@ -68,51 +62,6 @@ class PhotoUploadService(
         // Outstanding (unconsumed) grants count toward the trip quota until they expire, so a
         // caller can't mint unlimited reservations by never confirming.
         val GRANT_TTL: Duration = Duration.ofHours(24)
-    }
-
-    fun uploadPhoto(tripId: UUID, file: MultipartFile, userId: UUID): Photo {
-        val trip = tripService.getTrip(tripId, userId)
-
-        val contentType = file.contentType
-            ?: throw IllegalArgumentException("File content type is required")
-        if (contentType !in ALLOWED_CONTENT_TYPES) {
-            throw IllegalArgumentException("Unsupported file type: $contentType. Allowed: $ALLOWED_CONTENT_TYPES")
-        }
-
-        val photoId = UUID.randomUUID()
-        val isHeic = contentType in HEIC_CONTENT_TYPES
-
-        // Convert HEIC to JPEG for browser/PDF compatibility; other formats stored as-is (EXIF preserved)
-        val (storageBytes, storedContentType, extension) = if (isHeic) {
-            val converted = convertToJpeg(file)
-            Triple(converted, "image/jpeg", "jpg")
-        } else {
-            val ext = file.originalFilename?.substringAfterLast('.', "jpg") ?: "jpg"
-            Triple(file.bytes, contentType, ext)
-        }
-
-        val storageKey = "$tripId/$photoId.$extension"
-        storageService.store(storageKey, ByteArrayInputStream(storageBytes), storedContentType)
-
-        val metadata = extractMetadata(storageBytes)
-
-        val photo = Photo(
-            trip = trip,
-            storageKey = storageKey,
-            originalFilename = file.originalFilename ?: "unknown",
-            contentType = storedContentType,
-            fileSize = storageBytes.size.toLong(),
-            metadata = metadata
-        )
-
-        val saved = photoRepository.save(photo)
-        logger.info("Uploaded photo: {} for trip: {}", saved.id, tripId)
-
-        if (trip.status == TripStatus.CREATED) {
-            tripService.updateStatus(tripId, TripStatus.UPLOADING_PHOTOS)
-        }
-
-        return saved
     }
 
     @Transactional(readOnly = true)
@@ -181,12 +130,8 @@ class PhotoUploadService(
 
         return requests.map { req ->
             val ext = when (req.contentType) {
-                "image/jpeg" -> "jpg"
                 "image/png" -> "png"
-                "image/webp" -> "webp"
-                "image/heic" -> "heic"
-                "image/heif" -> "heif"
-                else -> req.filename.substringAfterLast('.', "jpg")
+                else -> "jpg" // contentType is validated to be jpeg/png above
             }
             val photoId = UUID.randomUUID()
             val storageKey = "$tripId/$photoId.$ext"
@@ -288,10 +233,11 @@ class PhotoUploadService(
     }
 
     /**
-     * Downloads the object and verifies it is a genuine, decodable image whose detected format
+     * Downloads the object and verifies it is a genuine, fully decodable image whose detected format
      * matches [expectedContentType], with dimensions within the caps — so arbitrary bytes merely
-     * labeled as an image (or a header with no pixel data) can't enter the vision/PDF pipeline.
-     * Returns the validated (width, height).
+     * labeled as an image (or a valid header with no/garbage pixel data) can't enter the vision/PDF
+     * pipeline. Only JPEG/PNG are accepted (see ALLOWED_CONTENT_TYPES), both of which the JVM can
+     * decode, so a real bounded decode is always performed. Returns the validated (width, height).
      */
     private fun validateImageObject(storageKey: String, expectedContentType: String): Pair<Int, Int> {
         val bytes = storageService.load(storageKey)
@@ -306,20 +252,18 @@ class PhotoUploadService(
             "Uploaded file type does not match the declared image type"
         }
 
-        // Prove the pixel data actually decodes (Java-decodable formats); for formats without a
-        // Java reader (HEIC/WebP) fall back to the header dimensions. Dimensions are required.
-        val dims = boundedDecodeDimensions(bytes)
-            ?: readImageDimensions(metadata)
-            ?: throw IllegalArgumentException("Could not determine image dimensions")
-        val (w, h) = dims
+        // Prove the pixel data actually decodes. No metadata-only fallback: an accepted format
+        // (JPEG/PNG) that ImageIO cannot decode is rejected, not trusted on its header dimensions.
+        val (w, h) = boundedDecodeDimensions(bytes)
+            ?: throw IllegalArgumentException("Uploaded file could not be decoded as an image")
         require(w in 1..MAX_IMAGE_DIMENSION && h in 1..MAX_IMAGE_DIMENSION) { "Image dimensions exceed the allowed maximum" }
         require(w.toLong() * h.toLong() <= MAX_IMAGE_PIXELS) { "Image resolution exceeds the allowed maximum" }
         return w to h
     }
 
-    /** Detected vs. expected MIME, treating HEIC/HEIF as equivalent and ignoring parameters. */
+    /** Detected vs. expected MIME, ignoring any parameters. */
     private fun mimeMatches(detected: String, expected: String): Boolean {
-        fun norm(s: String) = s.substringBefore(';').trim().lowercase().let { if (it == "image/heif") "image/heic" else it }
+        fun norm(s: String) = s.substringBefore(';').trim().lowercase()
         return norm(detected) == norm(expected)
     }
 
@@ -327,7 +271,8 @@ class PhotoUploadService(
      * Decodes the image with a bounded, subsampled read to prove the pixel stream is valid without
      * materialising a full-resolution raster (an 80 MP image would otherwise need ~320 MB). Returns
      * the true (width, height), throws if a reader exists but the data is undecodable/oversized, or
-     * returns null if no Java ImageIO reader supports the format (HEIC/WebP).
+     * returns null if no Java ImageIO reader supports the format (which, for the JPEG/PNG-only
+     * allowlist, means the bytes are not actually that format — the caller rejects it).
      */
     private fun boundedDecodeDimensions(bytes: ByteArray): Pair<Int, Int>? {
         ImageIO.createImageInputStream(ByteArrayInputStream(bytes)).use { iis ->
@@ -356,25 +301,6 @@ class PhotoUploadService(
         }
     }
 
-    /** Extracts pixel dimensions from parsed image metadata (works across JPEG/PNG/WebP/HEIF). */
-    private fun readImageDimensions(metadata: Metadata): Pair<Int, Int>? {
-        var width: Int? = null
-        var height: Int? = null
-        for (directory in metadata.directories) {
-            for (tag in directory.tags) {
-                val value = runCatching { directory.getInteger(tag.tagType) }.getOrNull()
-                if (value == null || value <= 0) continue
-                when {
-                    width == null && tag.tagName.equals("Image Width", ignoreCase = true) -> width = value
-                    height == null && tag.tagName.equals("Image Height", ignoreCase = true) -> height = value
-                }
-            }
-        }
-        val w = width
-        val h = height
-        return if (w != null && h != null) w to h else null
-    }
-
     fun deletePhoto(photoId: UUID, tripId: UUID, userId: UUID) {
         tripService.getTrip(tripId, userId)
         val photo = photoRepository.findByIdAndTripId(photoId, tripId)
@@ -383,73 +309,5 @@ class PhotoUploadService(
         photo.thumbnailKey?.let { runCatching { storageService.delete(it) } }
         photoRepository.delete(photo)
         logger.info("Deleted photo: {}", photoId)
-    }
-
-    private fun convertToJpeg(file: MultipartFile): ByteArray {
-        val heicTemp = Files.createTempFile("heic-", ".heic")
-        val jpegTemp = Files.createTempFile("conv-", ".jpg")
-        try {
-            Files.write(heicTemp, file.bytes)
-
-            val isMac = System.getProperty("os.name").lowercase().contains("mac")
-            val cmd = if (isMac)
-                listOf("sips", "-s", "format", "jpeg", heicTemp.toString(), "--out", jpegTemp.toString())
-            else
-                listOf("convert", heicTemp.toString(), jpegTemp.toString())
-            val process = ProcessBuilder(cmd)
-                .redirectErrorStream(true)
-                .start()
-            val completed = process.waitFor(30, TimeUnit.SECONDS)
-            if (!completed || process.exitValue() != 0) {
-                val output = process.inputStream.bufferedReader().readText()
-                throw IllegalStateException("HEIC conversion failed: $output")
-            }
-
-            val jpegBytes = Files.readAllBytes(jpegTemp)
-            logger.info("Converted HEIC to JPEG: {} ({}KB → {}KB)",
-                file.originalFilename, file.size / 1024, jpegBytes.size / 1024)
-            return jpegBytes
-        } finally {
-            Files.deleteIfExists(heicTemp)
-            Files.deleteIfExists(jpegTemp)
-        }
-    }
-
-    private fun extractMetadata(imageBytes: ByteArray): PhotoMetadata {
-        var width = 0
-        var height = 0
-        var takenAt: java.time.Instant? = null
-        var location: GeoLocation? = null
-
-        try {
-            val image = ImageIO.read(ByteArrayInputStream(imageBytes))
-            if (image != null) {
-                width = image.width
-                height = image.height
-            }
-        } catch (e: Exception) {
-            logger.warn("Failed to read image dimensions: {}", e.message)
-        }
-
-        try {
-            val exifMeta = ImageMetadataReader.readMetadata(ByteArrayInputStream(imageBytes))
-            val exif = exifMeta.getFirstDirectoryOfType(ExifSubIFDDirectory::class.java)
-            val date = exif?.getDate(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL)
-            if (date != null) {
-                takenAt = date.toInstant()
-                logger.info("Extracted EXIF takenAt: {}", takenAt)
-            }
-            val gps = exifMeta.getFirstDirectoryOfType(GpsDirectory::class.java)
-            val rawGeo = gps?.geoLocation
-            if (rawGeo != null) {
-                location = GeoLocation(rawGeo.latitude, rawGeo.longitude)
-                // Don't log exact coordinates — that's user PII flowing to centralized logs.
-                logger.debug("Extracted GPS location for photo")
-            }
-        } catch (e: Exception) {
-            logger.warn("Failed to extract EXIF data: {}", e.message)
-        }
-
-        return PhotoMetadata(width = width, height = height, takenAt = takenAt, location = location)
     }
 }

@@ -34,7 +34,6 @@ class RateLimitInterceptor(
         listOf(
             Rule("POST", "/api/trips/*/book/generate", generatePerHour),
             Rule("POST", "/api/books/*/regenerate", generatePerHour),
-            Rule("POST", "/api/trips/*/photos/bulk", uploadPerHour),
             Rule("POST", "/api/payments/create-order", orderPerHour),
             // Public/guest endpoints (unauthenticated) — keyed by client IP to curb abuse.
             Rule("POST", "/api/trips", uploadPerHour),

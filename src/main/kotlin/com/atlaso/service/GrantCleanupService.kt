@@ -3,6 +3,7 @@ package com.atlaso.service
 import com.atlaso.repository.UploadGrantRepository
 import org.slf4j.LoggerFactory
 import org.springframework.data.domain.PageRequest
+import org.springframework.data.domain.Sort
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -32,9 +33,10 @@ class GrantCleanupService(
         // Abandoned reservations: delete the orphaned S3 objects FIRST, and only remove the grant
         // row once every object for it is gone. If any delete fails (transient S3 error), we keep
         // the row so the next run retries it — a deleted row would otherwise orphan the object
-        // forever. Bounded batch: whatever we don't reach (or fail) is picked up next run.
+        // forever. Bounded batch, oldest first, so whatever we don't reach (or fail) is picked up
+        // next run. A persistently-undeletable object is the S3 lifecycle rule's backstop.
         val expired = uploadGrantRepository.findByConsumedFalseAndCreatedAtBefore(
-            cutoff, PageRequest.of(0, BATCH_SIZE)
+            cutoff, PageRequest.of(0, BATCH_SIZE, Sort.by("createdAt").ascending())
         )
         val deletableIds = mutableListOf<java.util.UUID>()
         var failed = 0

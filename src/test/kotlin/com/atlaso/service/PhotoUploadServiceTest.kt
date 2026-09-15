@@ -124,6 +124,16 @@ class PhotoUploadServiceTest {
     }
 
     @Test
+    fun `confirm rejects a valid PNG header with no decodable pixel data`() {
+        // Truncate a real PNG after its signature+IHDR: metadata still detects image/png and
+        // dimensions, but there is no IDAT/IEND so ImageIO cannot decode it — must be rejected.
+        val headerOnly = png(10, 10).copyOfRange(0, 33) // 8-byte signature + 25-byte IHDR chunk
+        whenever(grantRepo.findByPhotoIdAndTripId(photoId, tripId)).thenReturn(grant())
+        whenever(storage.load(key)).thenReturn(headerOnly)
+        assertThrows(IllegalArgumentException::class.java) { svc.confirmUploads(tripId, listOf(conf())) }
+    }
+
+    @Test
     fun `confirm rejects a grant already consumed by a concurrent request`() {
         whenever(grantRepo.findByPhotoIdAndTripId(photoId, tripId)).thenReturn(grant())
         whenever(grantRepo.markConsumed(any())).thenReturn(0) // lost the atomic consume race
