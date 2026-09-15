@@ -1,0 +1,20 @@
+# Trim what `railway up` uploads. build/ alone is ~100MB of regenerated artifacts that the
+# builder rebuilds anyway; sending it just slows the Initializing/upload phase.
+build/
+.gradle/
+.git/
+.github/
+.claude/
+uploads/
+
+# Docs & local-only config
+*.md
+src/main/resources/application-local.yml
+.env
+.env.*
+
+# Editor / OS cruft
+.idea/
+.vscode/
+.DS_Store
+*.iml

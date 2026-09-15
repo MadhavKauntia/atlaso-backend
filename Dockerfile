@@ -1,11 +1,15 @@
 FROM eclipse-temurin:21-jdk AS build
 WORKDIR /app
-COPY gradlew .
+# Copy only the build definition first, then resolve dependencies in a layer of their own.
+# This layer is cached and reused on every build where the build files are unchanged, so a
+# plain code change no longer re-downloads the whole dependency graph. The BuildKit cache
+# mount additionally persists ~/.gradle (dependency + build cache) across builds — Railway
+# supports RUN --mount=type=cache — so even a build-file change stays fast.
+COPY gradlew settings.gradle.kts build.gradle.kts ./
 COPY gradle gradle
-COPY build.gradle.kts .
-COPY settings.gradle.kts .
+RUN --mount=type=cache,target=/root/.gradle ./gradlew dependencies --no-daemon || true
 COPY src src
-RUN ./gradlew bootJar --no-daemon
+RUN --mount=type=cache,target=/root/.gradle ./gradlew bootJar --no-daemon
 
 FROM eclipse-temurin:21-jre
 RUN apt-get update && apt-get install -y imagemagick libheif-dev && rm -rf /var/lib/apt/lists/*

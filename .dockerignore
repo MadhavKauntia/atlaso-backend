@@ -1,0 +1,21 @@
+# Keep the Docker build context tiny — only the Gradle wrapper, build files, and src/
+# are COPY'd by the Dockerfile. Everything below is either regenerated during the build
+# (build/, .gradle) or irrelevant to it, and would otherwise bloat context transfer.
+build/
+.gradle/
+.git/
+.github/
+.claude/
+uploads/
+
+# Docs & local-only config
+*.md
+src/main/resources/application-local.yml
+.env
+.env.*
+
+# Editor / OS cruft
+.idea/
+.vscode/
+.DS_Store
+*.iml
