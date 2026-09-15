@@ -1,5 +1,6 @@
 package com.atlaso.infrastructure.ai
 
+import com.fasterxml.jackson.annotation.JsonCreator
 import com.fasterxml.jackson.annotation.JsonProperty
 
 /**
@@ -88,7 +89,18 @@ enum class SceneType {
     CITY,
 
     @JsonProperty("misc")
-    MISC
+    MISC;
+
+    companion object {
+        // Lenient parse: the vision model occasionally returns a scene_type outside this set (e.g.
+        // "activity", which is really a subject_type). Map anything unrecognised to MISC instead of
+        // throwing — a single stray value must not discard the whole response (keepsakeInterest,
+        // primarySubject, aestheticScore, …) and force an all-defaults fallback.
+        @JvmStatic
+        @JsonCreator
+        fun fromValue(value: String?): SceneType =
+            values().firstOrNull { it.name.equals(value?.trim(), ignoreCase = true) } ?: MISC
+    }
 }
 
 enum class TimeOfDay {
@@ -99,5 +111,13 @@ enum class TimeOfDay {
     GOLDEN_HOUR,
 
     @JsonProperty("night")
-    NIGHT
+    NIGHT;
+
+    companion object {
+        // Lenient parse: unrecognised time_of_day degrades to DAY rather than failing the response.
+        @JvmStatic
+        @JsonCreator
+        fun fromValue(value: String?): TimeOfDay =
+            values().firstOrNull { it.name.equals(value?.trim(), ignoreCase = true) } ?: DAY
+    }
 }

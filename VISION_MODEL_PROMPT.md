@@ -33,7 +33,7 @@ Rules:
 - aesthetic_score: 0.0 = low quality, 1.0 = professional/stunning
 - blur_score: 0.0 = sharp, 1.0 = very blurry
 - faces_count: number of human faces visible
-- scene_type: primary subject of the photo
+- scene_type: the primary scene category. MUST be EXACTLY one of: people, landscape, food, city, misc — never any other word. This is NOT the same as subject_type; never put a subject_type value here (e.g. "activity", "object", "architecture"). If people are the focus, including people doing an activity, use "people"; buildings/streets/monuments → "city"; nature/scenery → "landscape"; meals/drinks → "food"; anything else → "misc".
 - time_of_day: lighting conditions
 - dominant_colors: 2-4 most prominent colors as hex codes
 - detected_objects: 3-6 key objects or subjects visible in the photo
