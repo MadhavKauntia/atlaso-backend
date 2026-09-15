@@ -2,13 +2,16 @@ plugins {
 	kotlin("jvm") version "1.9.25"
 	kotlin("plugin.spring") version "1.9.25"
 	kotlin("plugin.jpa") version "1.9.25"
-	id("org.springframework.boot") version "3.5.9"
+	id("org.springframework.boot") version "3.5.16"
 	id("io.spring.dependency-management") version "1.1.7"
 }
 
 group = "com.atlaso"
 version = "0.0.1-SNAPSHOT"
 description = "Backend service for Atlaso travel photobooks"
+// Boot 3.5.16 (up from 3.5.9) pulls patched Spring Security 6.5.11 (CVE-2026-22732, fixed in
+// 6.5.9) and Tomcat 10.1.55 via its managed BOM — security review #7. Both are past the
+// vulnerable versions flagged (6.5.7 / 10.1.50).
 
 java {
 	toolchain {
@@ -50,6 +53,7 @@ dependencies {
 	implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
 
 	testImplementation("org.springframework.boot:spring-boot-starter-test")
+	testImplementation("org.mockito.kotlin:mockito-kotlin:5.4.0")
 	testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
 	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

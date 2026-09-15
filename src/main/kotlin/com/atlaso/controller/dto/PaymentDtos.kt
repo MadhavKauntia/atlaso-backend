@@ -3,7 +3,11 @@ package com.atlaso.controller.dto
 import java.util.UUID
 
 data class CreateOrderRequest(
-    val amount: Long,
+    // Price is computed server-side from tripId + quantity (+ coupon). Any client-supplied
+    // `amount` is ignored — kept nullable only so older clients still deserialize.
+    val tripId: UUID,
+    val quantity: Int? = null,
+    val amount: Long? = null,
     val currency: String? = null,
     val receipt: String? = null,
     // When present, the coupon's Razorpay offer is linked to the order.

@@ -37,6 +37,10 @@ data class Photo(
     @Column(nullable = false, name = "file_size")
     val fileSize: Long,
 
+    /** Stored thumbnail size (bytes), so confirmed thumbnails count toward the trip byte quota. */
+    @Column(name = "thumbnail_size_bytes")
+    val thumbnailSizeBytes: Long? = null,
+
     @Type(JsonType::class)
     @Column(nullable = false, columnDefinition = "jsonb")
     val metadata: PhotoMetadata,

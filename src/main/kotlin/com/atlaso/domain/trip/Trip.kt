@@ -35,6 +35,12 @@ data class Trip(
     @Column(nullable = false, length = 50)
     var status: TripStatus = TripStatus.CREATED,
 
+    // SHA-256 hash of the guest capability token handed out at creation. Required to operate
+    // on a guest trip by UUID (upload/claim) so the UUID alone isn't a password. Null for
+    // legacy trips created before this was introduced (those keep the old behaviour).
+    @Column(name = "guest_token_hash", length = 64)
+    var guestTokenHash: String? = null,
+
     @CreationTimestamp
     @Column(nullable = false, updatable = false, name = "created_at")
     val createdAt: Instant? = null,

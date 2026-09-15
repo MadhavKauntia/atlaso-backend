@@ -49,7 +49,21 @@ class LocalStorageService(
         logger.info("Deleted file at: {}", filePath)
     }
 
+    override fun head(key: String): ObjectHead? {
+        val path = resolveFilePath(key)
+        if (!Files.exists(path)) return null
+        return ObjectHead(contentLength = Files.size(path), contentType = Files.probeContentType(path))
+    }
+
+    /**
+     * Resolves [key] under the storage base directory, guarding against path traversal:
+     * the normalized absolute path must stay inside the base. A key like `../../etc/passwd`
+     * is rejected instead of escaping the storage root.
+     */
     private fun resolveFilePath(key: String): Path {
-        return Paths.get(storageConfig.basePath).resolve(key)
+        val base = Paths.get(storageConfig.basePath).toAbsolutePath().normalize()
+        val resolved = base.resolve(key).normalize()
+        require(resolved.startsWith(base)) { "Illegal storage key (path traversal): $key" }
+        return resolved
     }
 }

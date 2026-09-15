@@ -10,7 +10,9 @@ import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest
 import software.amazon.awssdk.services.s3.model.GetObjectRequest
+import software.amazon.awssdk.services.s3.model.HeadObjectRequest
 import software.amazon.awssdk.services.s3.model.PutObjectRequest
+import software.amazon.awssdk.services.s3.model.S3Exception
 import software.amazon.awssdk.services.s3.presigner.S3Presigner
 import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest
 import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest
@@ -59,6 +61,15 @@ class S3StorageService(
                 .key(key)
                 .build()
         ).asByteArray()
+    }
+
+    override fun head(key: String): ObjectHead? = try {
+        val h = s3.headObject(HeadObjectRequest.builder().bucket(config.bucketName).key(key).build())
+        ObjectHead(contentLength = h.contentLength() ?: 0L, contentType = h.contentType())
+    } catch (e: S3Exception) {
+        // HeadObject has no response body, so a missing key surfaces as a 404 S3Exception
+        // (not NoSuchKeyException). Only 404 means "absent" — let auth/network errors propagate.
+        if (e.statusCode() == 404) null else throw e
     }
 
     override fun getAccessUrl(key: String, contentType: String): String {

@@ -1,6 +1,9 @@
 package com.atlaso.service
 
+import com.atlaso.domain.order.Checkout
 import com.atlaso.domain.order.Order
+import com.atlaso.domain.trip.TripStatus
+import com.atlaso.repository.CheckoutRepository
 import com.atlaso.repository.OrderRepository
 import com.atlaso.repository.UserRepository
 import org.slf4j.LoggerFactory
@@ -9,6 +12,9 @@ import org.springframework.transaction.annotation.Transactional
 import java.util.UUID
 
 private const val UNIT_PRICE_MINOR = Pricing.UNIT_PRICE_MINOR // Rs. 1999 in paise
+
+/** Thrown when a captured payment fails server-side verification (status/amount/order/ownership). */
+class PaymentVerificationException(message: String) : RuntimeException(message)
 
 /** Shipping details captured at checkout (recipient name/email come from the account). */
 data class ShippingInput(
@@ -24,6 +30,7 @@ data class ShippingInput(
 @Service
 class OrderService(
     private val orderRepository: OrderRepository,
+    private val checkoutRepository: CheckoutRepository,
     private val userRepository: UserRepository,
     private val tripService: TripService,
     private val bookGenerationService: BookGenerationService,
@@ -35,32 +42,38 @@ class OrderService(
     private val logger = LoggerFactory.getLogger(OrderService::class.java)
 
     /**
-     * Records a paid order after a verified payment. Idempotent on the Razorpay
-     * payment id. Ownership of [tripId] must already have been validated.
+     * Records a paid order from a server-side [checkout] binding after signature verification.
+     * Re-verifies the captured payment against Razorpay (status = captured, order match, amount
+     * ≥ expected, currency), then — in one transaction — creates the order, flips the trip to
+     * ORDERED, and closes the checkout. Idempotent on the payment id (app- and DB-level), so a
+     * payment can't be replayed into multiple orders or against multiple trips.
      */
     @Transactional
-    fun createPaidOrder(
-        tripId: UUID,
-        userId: UUID,
-        razorpayOrderId: String?,
-        razorpayPaymentId: String?,
-        quantity: Int?,
-        shipping: ShippingInput? = null,
-        couponCode: String? = null,
-    ): Order {
-        razorpayPaymentId?.let { pid ->
-            orderRepository.findByRazorpayPaymentId(pid)?.let { return it }
-        }
+    fun recordPaidOrder(checkout: Checkout, razorpayPaymentId: String, shipping: ShippingInput? = null): Order {
+        orderRepository.findByRazorpayPaymentId(razorpayPaymentId)?.let { return it }
 
-        val trip = tripService.getTrip(tripId, userId) // throws if not owned
+        val payment = paymentService.fetchPayment(razorpayPaymentId)
+            ?: throw PaymentVerificationException("Could not verify payment with Razorpay")
+        if (payment.status != "captured") throw PaymentVerificationException("Payment is not captured")
+        // Require exact, non-null matches from the provider — never accept missing fields.
+        if (payment.orderId == null || payment.orderId != checkout.razorpayOrderId)
+            throw PaymentVerificationException("Payment does not belong to this order")
+        val captured = payment.amountMinor
+            ?: throw PaymentVerificationException("Captured amount missing")
+        if (captured < checkout.amountMinor)
+            throw PaymentVerificationException("Captured amount is below the order amount")
+        if (payment.currency == null || !payment.currency.equals(checkout.currency, ignoreCase = true))
+            throw PaymentVerificationException("Currency mismatch")
+
+        val tripId = checkout.tripId
+        val userId = checkout.userId
+        val trip = tripService.getTrip(tripId, userId) // ownership re-check
         val user = userRepository.findById(userId).orElse(null)
-        val payment = razorpayPaymentId?.let { paymentService.fetchPayment(it) }
 
-        val qty = (quantity ?: 1).coerceAtLeast(1)
+        val qty = checkout.quantity
         val listMinor = qty * UNIT_PRICE_MINOR
-        // Razorpay applies the offer discount, so the captured amount is authoritative.
-        val amountMinor = payment?.amountMinor ?: listMinor
-        val coupon = couponCode?.takeIf { it.isNotBlank() }?.let { couponService.findByCode(it) }
+        val amountMinor = captured // authoritative captured amount from Razorpay
+        val coupon = checkout.couponCode?.takeIf { it.isNotBlank() }?.let { couponService.findByCode(it) }
         val discountMinor = coupon?.let { (listMinor - amountMinor).takeIf { d -> d > 0 } }
         val book = runCatching { bookGenerationService.getLatestBookByTripId(tripId, userId) }.getOrNull()
 
@@ -69,7 +82,7 @@ class OrderService(
             trip = trip,
             bookId = book?.id,
             bookTitle = book?.title,
-            razorpayOrderId = razorpayOrderId,
+            razorpayOrderId = checkout.razorpayOrderId,
             razorpayPaymentId = razorpayPaymentId,
             paymentMethod = payment?.method,
             amountMinor = amountMinor,
@@ -90,6 +103,12 @@ class OrderService(
             status = "PAID",
         )
         val saved = orderRepository.save(order)
+
+        // Same transaction: flip the trip to ORDERED and close the checkout, so a payment
+        // only ever marks the ONE bound trip (and only once).
+        tripService.updateStatus(tripId, TripStatus.ORDERED)
+        checkout.status = "COMPLETED"
+        checkoutRepository.save(checkout)
         logger.info("Recorded order ATL-{} for trip {}", saved.number, tripId)
 
         // Count the redemption against the coupon's usage cap — best-effort.

@@ -34,8 +34,11 @@ class RateLimitInterceptor(
         listOf(
             Rule("POST", "/api/trips/*/book/generate", generatePerHour),
             Rule("POST", "/api/books/*/regenerate", generatePerHour),
-            Rule("POST", "/api/trips/*/photos/bulk", uploadPerHour),
             Rule("POST", "/api/payments/create-order", orderPerHour),
+            // Public/guest endpoints (unauthenticated) — keyed by client IP to curb abuse.
+            Rule("POST", "/api/trips", uploadPerHour),
+            Rule("POST", "/api/trips/*/photos/initiate", uploadPerHour),
+            Rule("POST", "/api/trips/*/photos/confirm", uploadPerHour),
         )
     }
 
@@ -56,6 +59,8 @@ class RateLimitInterceptor(
 
     private fun principalKey(request: HttpServletRequest): String {
         val sub = (SecurityContextHolder.getContext().authentication?.principal as? Jwt)?.subject
+        // remoteAddr is the real client IP via forward-headers-strategy=native (RemoteIpValve),
+        // not a spoofable header we parse ourselves.
         return sub ?: (request.remoteAddr ?: "anon")
     }
 }

@@ -7,9 +7,18 @@ import com.atlaso.repository.UserRepository
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import java.security.MessageDigest
+import java.security.SecureRandom
+import java.util.Base64
 import java.util.UUID
 
 class TripNotFoundException(id: UUID) : RuntimeException("Trip not found: $id")
+
+/** Thrown when a guest operation is attempted without the trip's capability token. */
+class GuestTokenException(message: String) : RuntimeException(message)
+
+/** A newly created guest trip plus its one-time capability token (returned to the client once). */
+data class TripWithToken(val trip: Trip, val guestToken: String)
 
 @Service
 @Transactional
@@ -18,13 +27,55 @@ class TripService(
     private val userRepository: UserRepository
 ) {
     private val logger = LoggerFactory.getLogger(TripService::class.java)
+    private val secureRandom = SecureRandom()
 
-    // Guest trip — no user yet; claimed later via claimTrip()
-    fun createTrip(name: String, destination: String?): Trip {
-        val trip = Trip(name = name, destination = destination, user = null)
+    // Guest trip — no user yet; claimed later via claimTrip(). Returns the capability token
+    // once; only its hash is stored.
+    fun createTrip(name: String, destination: String?): TripWithToken {
+        val token = generateGuestToken()
+        val trip = Trip(name = name, destination = destination, user = null, guestTokenHash = hashToken(token))
         val saved = tripRepository.save(trip)
         logger.info("Created guest trip: {} ({})", saved.id, saved.name)
-        return saved
+        return TripWithToken(saved, token)
+    }
+
+    private fun generateGuestToken(): String {
+        val bytes = ByteArray(32).also { secureRandom.nextBytes(it) }
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+    }
+
+    private fun hashToken(token: String): String =
+        MessageDigest.getInstance("SHA-256").digest(token.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+
+    private fun tokenMatches(provided: String?, storedHash: String): Boolean {
+        val hashed = provided?.let { hashToken(it) } ?: return false
+        return MessageDigest.isEqual(hashed.toByteArray(Charsets.UTF_8), storedHash.toByteArray(Charsets.UTF_8))
+    }
+
+    /**
+     * Enforces guest capability for operations on a trip by UUID. A claimed trip must be
+     * operated with the owner's JWT (authenticated endpoints), not the guest token. An
+     * unclaimed trip requires its matching guest token — no grandfathering, so a bare UUID
+     * (or a tokenless legacy trip) can never be used. (Clear tokenless legacy trips before
+     * launch; see the PR notes.)
+     */
+    /**
+     * Authorizes any by-UUID operation (read or guest upload) on a trip: a **claimed** trip
+     * requires the owner's JWT; an **unclaimed** trip requires its matching guest token. No
+     * grandfathering — a bare UUID (or a tokenless legacy trip) is never sufficient. This is
+     * the single dual-auth gate for guest reads AND the presigned upload flow, so a claimed
+     * trip's owner keeps upload access via their JWT.
+     */
+    fun assertTripAccess(tripId: UUID, userId: UUID?, guestToken: String?) {
+        val trip = tripRepository.findById(tripId).orElseThrow { TripNotFoundException(tripId) }
+        val owner = trip.user
+        if (owner != null) {
+            if (userId == null || owner.id != userId) throw GuestTokenException("Sign in as the owner to continue")
+        } else {
+            val hash = trip.guestTokenHash ?: throw GuestTokenException("Guest access is not available for this trip")
+            if (!tokenMatches(guestToken, hash)) throw GuestTokenException("Invalid or missing guest token")
+        }
     }
 
     // Public lookup by ID — no ownership check (used by guest flow and public endpoints)
@@ -38,16 +89,23 @@ class TripService(
             .orElseThrow { TripNotFoundException(id) }
     }
 
-    // Associate a guest trip with a logged-in user (idempotent)
-    fun claimTrip(tripId: UUID, userId: UUID): Trip {
+    // Associate a guest trip with a logged-in user (idempotent). Claiming an unclaimed trip
+    // requires its guest token, so a UUID alone can't be used to hijack someone's trip.
+    fun claimTrip(tripId: UUID, userId: UUID, guestToken: String? = null): Trip {
         val trip = tripRepository.findById(tripId).orElseThrow { TripNotFoundException(tripId) }
         val existingUser = trip.user
         if (existingUser != null) {
             if (existingUser.id != userId) throw RuntimeException("Trip already belongs to another user")
             return trip // already claimed by this user
         }
+        // Require the matching guest token to claim — a UUID alone can't hijack a trip.
+        val hash = trip.guestTokenHash ?: throw GuestTokenException("Guest token required to claim this trip")
+        if (!tokenMatches(guestToken, hash)) throw GuestTokenException("Invalid or missing guest token")
+
         val user = userRepository.findById(userId).orElseThrow { RuntimeException("User not found") }
         trip.user = user
+        // Revoke the guest token on claim — subsequent access must use the owner's JWT.
+        trip.guestTokenHash = null
         val saved = tripRepository.save(trip)
         logger.info("Claimed trip: {} for user: {}", tripId, userId)
         return saved

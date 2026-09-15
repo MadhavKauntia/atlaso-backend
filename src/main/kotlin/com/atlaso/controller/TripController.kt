@@ -19,11 +19,12 @@ class TripController(
     private val tripService: TripService
 ) {
 
-    // Public — creates a guest trip with no user attached
+    // Public — creates a guest trip with no user attached. Returns a one-time guest token
+    // the client must send (X-Guest-Token) for later guest operations on this trip.
     @PostMapping
     fun createTrip(@RequestBody request: CreateTripRequest): ResponseEntity<TripResponse> {
-        val trip = tripService.createTrip(request.name, request.destination)
-        return ResponseEntity.status(HttpStatus.CREATED).body(TripResponse.from(trip))
+        val (trip, guestToken) = tripService.createTrip(request.name, request.destination)
+        return ResponseEntity.status(HttpStatus.CREATED).body(TripResponse.from(trip, guestToken))
     }
 
     @GetMapping
@@ -33,9 +34,14 @@ class TripController(
         return ResponseEntity.ok(trips)
     }
 
-    // Public — needed by cover page and upload page before login
+    // Guest-readable before login with the guest token; owner JWT after claim.
     @GetMapping("/{id}")
-    fun getTrip(@PathVariable id: UUID): ResponseEntity<TripResponse> {
+    fun getTrip(
+        @PathVariable id: UUID,
+        @RequestHeader(value = "X-Guest-Token", required = false) guestToken: String?,
+        @AuthenticationPrincipal jwt: Jwt?
+    ): ResponseEntity<TripResponse> {
+        tripService.assertTripAccess(id, jwt?.subject?.let(UUID::fromString), guestToken)
         val trip = tripService.getTrip(id)
         return ResponseEntity.ok(TripResponse.from(trip))
     }
@@ -61,25 +67,20 @@ class TripController(
         return ResponseEntity.noContent().build()
     }
 
-    // Requires auth — associates the guest trip with the authenticated user
+    // Requires auth — associates the guest trip with the authenticated user. Claiming an
+    // unclaimed trip requires its guest token so a UUID alone can't hijack a trip.
     @PostMapping("/{id}/claim")
     fun claimTrip(
         @PathVariable id: UUID,
+        @RequestHeader(value = "X-Guest-Token", required = false) guestToken: String?,
         @AuthenticationPrincipal jwt: Jwt
     ): ResponseEntity<TripResponse> {
         val userId = UUID.fromString(jwt.subject)
-        val trip = tripService.claimTrip(id, userId)
+        val trip = tripService.claimTrip(id, userId, guestToken)
         return ResponseEntity.ok(TripResponse.from(trip))
     }
 
-    @PostMapping("/{id}/order")
-    fun markOrdered(
-        @PathVariable id: UUID,
-        @AuthenticationPrincipal jwt: Jwt
-    ): ResponseEntity<TripResponse> {
-        val userId = UUID.fromString(jwt.subject)
-        tripService.getTrip(id, userId) // validates ownership
-        val trip = tripService.updateStatus(id, TripStatus.ORDERED)
-        return ResponseEntity.ok(TripResponse.from(trip))
-    }
+    // NOTE: the old POST /{id}/order endpoint was removed — a trip may only be marked ORDERED
+    // by the verified-payment transaction (PaymentController.verify → OrderService), never on
+    // an unauthenticated client's say-so.
 }

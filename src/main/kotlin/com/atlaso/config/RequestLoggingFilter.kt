@@ -28,8 +28,8 @@ class RequestLoggingFilter : OncePerRequestFilter() {
             chain.doFilter(request, response)
         } finally {
             val ms = System.currentTimeMillis() - start
-            val query = request.queryString?.let { "?$it" } ?: ""
-            log.info("{} {}{} -> {} ({} ms)", request.method, request.requestURI, query, response.status, ms)
+            // Path only — query strings can carry storage keys / other params; keep them out of logs.
+            log.info("{} {} -> {} ({} ms)", request.method, request.requestURI, response.status, ms)
         }
     }
 
