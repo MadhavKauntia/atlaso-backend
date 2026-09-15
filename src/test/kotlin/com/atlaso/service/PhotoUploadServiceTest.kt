@@ -6,6 +6,7 @@ import com.atlaso.domain.photo.Photo
 import com.atlaso.domain.photo.UploadGrant
 import com.atlaso.domain.trip.Trip
 import com.atlaso.domain.trip.TripStatus
+import com.atlaso.repository.BookRepository
 import com.atlaso.repository.PhotoRepository
 import com.atlaso.repository.TripRepository
 import com.atlaso.repository.UploadGrantRepository
@@ -30,7 +31,8 @@ class PhotoUploadServiceTest {
     private val tripService = mock<TripService>()
     private val grantRepo = mock<UploadGrantRepository>()
     private val tripRepo = mock<TripRepository>()
-    private val svc = PhotoUploadService(photoRepo, storage, tripService, grantRepo, tripRepo)
+    private val bookRepo = mock<BookRepository>()
+    private val svc = PhotoUploadService(photoRepo, storage, tripService, grantRepo, tripRepo, bookRepo)
 
     private val tripId = UUID.randomUUID()
     private val photoId = UUID.randomUUID()
@@ -74,6 +76,18 @@ class PhotoUploadServiceTest {
         whenever(storage.load(key)).thenReturn(png())
         whenever(grantRepo.markConsumed(any())).thenReturn(1)
         whenever(photoRepo.saveAll(any<List<Photo>>())).thenAnswer { it.arguments[0] }
+    }
+
+    @Test
+    fun `initiate is rejected once a book has been generated for the trip`() {
+        whenever(bookRepo.existsByTripId(tripId)).thenReturn(true) // photo set is locked
+        assertThrows(IllegalArgumentException::class.java) {
+            svc.initiateUploads(
+                tripId,
+                listOf(InitiateUploadRequest(filename = "a.jpg", contentType = "image/jpeg", fileSize = 1000)),
+                userId = UUID.randomUUID()
+            )
+        }
     }
 
     @Test

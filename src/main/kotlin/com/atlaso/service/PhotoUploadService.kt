@@ -8,6 +8,7 @@ import com.atlaso.domain.photo.Photo
 import com.atlaso.domain.photo.PhotoMetadata
 import com.atlaso.domain.photo.UploadGrant
 import com.atlaso.domain.trip.TripStatus
+import com.atlaso.repository.BookRepository
 import com.atlaso.repository.PhotoRepository
 import com.atlaso.repository.TripRepository
 import com.atlaso.repository.UploadGrantRepository
@@ -32,7 +33,8 @@ class PhotoUploadService(
     private val storageService: StorageService,
     private val tripService: TripService,
     private val uploadGrantRepository: UploadGrantRepository,
-    private val tripRepository: TripRepository
+    private val tripRepository: TripRepository,
+    private val bookRepository: BookRepository
 ) {
     private val logger = LoggerFactory.getLogger(PhotoUploadService::class.java)
 
@@ -97,6 +99,12 @@ class PhotoUploadService(
 
     fun initiateUploads(tripId: UUID, requests: List<InitiateUploadRequest>, userId: UUID? = null, guestToken: String? = null): List<InitiateUploadResponse> {
         tripService.assertTripAccess(tripId, userId, guestToken) // owner JWT (claimed) or guest token
+        // Lock the photo set once a book has been generated for this trip: further uploads would be
+        // analysed (paid) without consuming a free preview. Editing a book happens by swapping among
+        // already-uploaded photos in the checkout flow, not by adding new ones.
+        require(!bookRepository.existsByTripId(tripId)) {
+            "Photos can't be added after a book has been generated for this trip. Start a new trip to make another book."
+        }
         require(requests.isNotEmpty() && requests.size <= MAX_UPLOAD_BATCH) {
             "Between 1 and $MAX_UPLOAD_BATCH photos may be initiated per request."
         }
