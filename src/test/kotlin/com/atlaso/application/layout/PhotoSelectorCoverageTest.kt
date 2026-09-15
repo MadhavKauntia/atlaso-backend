@@ -18,7 +18,7 @@ class PhotoSelectorCoverageTest {
 
     @Test
     fun `keeps a low-scoring event on large trips that competition would otherwise drop`() {
-        // 5 rich events of 50 strong photos each (250 total) → forces the >200 selection
+        // 5 rich events of 50 strong photos each (250 total) → forces the >150 selection
         // path. Plus one isolated event with a single usable-but-weaker photo.
         val photos = mutableListOf<Photo>()
         var t = base
@@ -35,7 +35,7 @@ class PhotoSelectorCoverageTest {
 
         val result = selector.selectPhotosForBook(photos)
 
-        assertEquals(200, result.photos.size) { "Expected the large-trip cap of 200" }
+        assertEquals(150, result.photos.size) { "Expected the large-trip cap of 150" }
         assertTrue(lonely.id in result.photos.mapNotNull { it.id }) {
             "Coverage guard failed: the only photo of an event was dropped by competition"
         }

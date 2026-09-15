@@ -59,10 +59,13 @@ class PhotoSelector(
             log.add("After repeat-subject cap: ${cappedPhotos.size} photos (removed ${dedupedPhotos.size - cappedPhotos.size})")
         }
 
-        // Phase 3: Adaptive selection — keep all photos up to 200 (50 pages × 4 per page max).
-        // Above 200, apply diversity scoring to pick the best spread.
-        // If quality filter + dedup dropped us below 50, relax: skip quality filter and dedup again.
-        val maxPhotos = 200
+        // Phase 3: Adaptive selection — keep all photos up to 150. Across the fixed 50 pages that
+        // averages ~3 photos/page, deliberately leaving the grouper room for pairs and threes
+        // instead of packing nearly every page into a 4-up 2×2 grid (150 ÷ 50 = 3.0, vs the old
+        // 200 cap = 4.0 which forced dense-dense spreads throughout). Above 150, diversity scoring
+        // picks the best spread. If quality filter + dedup dropped us below 50, relax: skip the
+        // quality filter and dedup again.
+        val maxPhotos = 150
         val minPhotos = 50
         val selectedPhotos = when {
             cappedPhotos.size >= maxPhotos ->
