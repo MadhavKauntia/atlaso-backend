@@ -162,7 +162,7 @@ class BookGenerationService(
         // is best-effort and swallows its own errors.
         book.readyEmailSentAt = java.time.Instant.now()
         bookRepository.save(book)
-        emailService.sendBookReadyEmail(email, owner.name, book.trip.id!!, bookId, book.title)
+        emailService.sendBookReadyEmail(email, owner.name, book.trip.id!!, bookId, book.title, book.coverPhoto?.id)
     }
 
     /** Runs [action] after the current transaction commits (or immediately if none is active). */

@@ -38,7 +38,7 @@ class EmailService(
      * Emails the trip owner that their photobook is ready to preview, with a deep link to the
      * preview page. Best-effort: logs and returns on any problem, never throws.
      */
-    fun sendBookReadyEmail(toEmail: String, toName: String?, tripId: UUID, bookId: UUID, bookTitle: String) {
+    fun sendBookReadyEmail(toEmail: String, toName: String?, tripId: UUID, bookId: UUID, bookTitle: String, coverPhotoId: UUID? = null) {
         if (!bookReadyEmailEnabled) {
             logger.info("Book-ready email disabled — skipping for book {}", bookId)
             return
@@ -48,11 +48,15 @@ class EmailService(
             return
         }
         val previewUrl = "$appUrl/trips/$tripId/preview?bookId=$bookId"
+        // Route the cover through the public, self-refreshing image endpoint (302 -> fresh presigned
+        // S3 URL on every load) so it still renders when the email is opened days later — never embed
+        // a raw presigned URL, which expires in an hour.
+        val coverUrl = coverPhotoId?.let { "$appUrl/api/trips/$tripId/photos/$it/image" }
         val body = mapOf(
             "sender" to mapOf("name" to senderName, "email" to senderEmail),
             "to" to listOf(mapOf("email" to toEmail, "name" to (toName ?: toEmail))),
             "subject" to "Your Atlaso photobook is ready to preview",
-            "htmlContent" to buildBookReadyHtml(toName, bookTitle, previewUrl),
+            "htmlContent" to buildBookReadyHtml(toName, bookTitle, previewUrl, coverUrl),
         )
         try {
             val request = Request.Builder()
@@ -76,8 +80,15 @@ class EmailService(
         }
     }
 
-    private fun buildBookReadyHtml(name: String?, title: String, previewUrl: String): String {
+    private fun buildBookReadyHtml(name: String?, title: String, previewUrl: String, coverUrl: String? = null): String {
         val hi = name?.trim()?.takeIf { it.isNotBlank() }?.let { "Hi $it, " } ?: ""
+        val coverBlock = coverUrl?.let {
+            """
+                <a href="$previewUrl" style="display:block;margin:0 0 22px;">
+                  <img src="$it" alt="$title" width="472" style="display:block;width:100%;max-width:472px;height:auto;border:0;border-radius:12px;" />
+                </a>
+            """.trimIndent()
+        } ?: ""
         return """
         <!doctype html>
         <html>
@@ -89,6 +100,7 @@ class EmailService(
                 <p style="font-size:15px;line-height:1.6;color:#4a443e;margin:0 0 22px;">
                   ${hi}we've finished designing <strong>$title</strong>. Take a look, and when you're happy with it, order your printed copy.
                 </p>
+                $coverBlock
                 <a href="$previewUrl" style="display:inline-block;background:#c9352c;color:#ffffff;text-decoration:none;font-weight:700;font-size:15px;padding:13px 26px;border-radius:999px;">
                   View your book &rarr;
                 </a>
