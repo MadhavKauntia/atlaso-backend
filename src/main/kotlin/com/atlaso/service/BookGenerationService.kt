@@ -6,9 +6,11 @@ import com.atlaso.domain.book.Book
 import com.atlaso.domain.book.BookStatus
 import com.atlaso.domain.book.PhotoSlot
 import com.atlaso.domain.trip.TripStatus
+import com.atlaso.domain.user.FREE_PREVIEW_QUOTA
 import com.atlaso.repository.BookRepository
 import com.atlaso.repository.PageRepository
 import com.atlaso.repository.PhotoRepository
+import com.atlaso.repository.UserRepository
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Lazy
@@ -20,6 +22,7 @@ import java.util.UUID
 
 class BookNotFoundException(id: UUID) : RuntimeException("Book not found: $id")
 class NoPhotosAvailableException(tripId: UUID) : RuntimeException("No photos available for trip: $tripId")
+class FreePreviewQuotaExceededException(userId: UUID) : RuntimeException("Free preview quota exhausted for user: $userId")
 
 @Service
 @Transactional
@@ -27,6 +30,7 @@ class BookGenerationService(
     private val bookRepository: BookRepository,
     private val photoRepository: PhotoRepository,
     private val pageRepository: PageRepository,
+    private val userRepository: UserRepository,
     private val photoAnalysisService: PhotoAnalysisService,
     private val photoSelector: PhotoSelector,
     private val layoutEngine: LayoutEngine,
@@ -52,6 +56,13 @@ class BookGenerationService(
     fun startGeneration(tripId: UUID, userId: UUID, coverCountry: String? = null, subtitle: String? = null): Book {
         val trip = tripService.getTrip(tripId, userId)
         val nextVersion = (bookRepository.findByTripIdOrderByVersionDesc(tripId).firstOrNull()?.version ?: 0) + 1
+        // Free-preview quota: only the FIRST generation of a trip runs (paid) photo analysis, so
+        // only it consumes a preview — regenerations reuse cached analysis and stay free. The
+        // atomic decrement means a double-submit can't over-consume; when the user is out of free
+        // previews this throws → 402, and the client prompts them to place an order.
+        if (nextVersion == 1 && userRepository.tryConsumeFreePreview(userId) == 0) {
+            throw FreePreviewQuotaExceededException(userId)
+        }
         // Persist the cover country at creation, so it's committed before the worker runs (which
         // reloads and preserves it) and before the ready-email fires — regardless of whether the
         // client stays on the generating tab to PATCH it later. Without this the cover renders
@@ -143,9 +154,14 @@ class BookGenerationService(
     /** Marks a book FAILED (its own transaction) so a failed background run is visible to the client. */
     @Transactional
     fun markFailed(bookId: UUID) {
-        bookRepository.findById(bookId).ifPresent {
-            it.status = BookStatus.FAILED
-            bookRepository.save(it)
+        bookRepository.findById(bookId).ifPresent { book ->
+            book.status = BookStatus.FAILED
+            bookRepository.save(book)
+            // Don't charge a user's free quota for our own failure: refund the preview if the
+            // FIRST generation failed (regenerations never consumed one).
+            if (book.version == 1) {
+                book.trip.user?.id?.let { userRepository.refundFreePreview(it, FREE_PREVIEW_QUOTA) }
+            }
         }
     }
 
