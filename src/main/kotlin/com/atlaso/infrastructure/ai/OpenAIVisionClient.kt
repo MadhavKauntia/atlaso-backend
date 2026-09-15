@@ -39,7 +39,9 @@ Analyze the image and return ONLY this exact JSON structure:
   "subject_prominence": <one of: "low", "medium", "high">,
   "setting_scope": <one of: "detail", "subject", "environment">,
   "background_complexity": <one of: "low", "medium", "high">,
-  "negative_space": <one of: "low", "medium", "high">
+  "negative_space": <one of: "low", "medium", "high">,
+  "keepsake_interest": <float 0.0-1.0>,
+  "primary_subject": <short lowercase noun phrase, 1-4 words>
 }
 
 Rules:
@@ -60,8 +62,10 @@ Rules:
 - setting_scope: detail = a small detail/close object; subject = a subject in context; environment = the whole place/scene
 - background_complexity: how busy or cluttered the background is
 - negative_space: amount of clean, empty space around the subject
+- keepsake_interest: how much this photo reads as a memorable travel keepsake versus a mundane or utility snapshot. HIGH (0.8-1.0): scenic vistas, landmarks, temples, wildlife, people enjoying the trip, a signature local dish plated as an experience, a distinctive cultural moment. LOW (0.0-0.3): utility/incidental shots you'd never frame — a bike lock or its combination, shoes on the floor, a generic storefront or shopfront sign, a supermarket aisle, a lone disposable coffee cup, parking, receipts, transit screens, a plain hotel-room detail. MEDIUM (0.4-0.7): ordinary but pleasant travel shots. Judge memorability, NOT technical quality — a sharp, well-exposed photo of a bike lock is still LOW.
+- primary_subject: a short, stable label naming the single main subject, lowercase, 1-4 words, generic enough to be identical across near-identical photos of the same thing (e.g. "coconut drink", "rice terrace", "temple gateway", "beach sunset", "ramen bowl"). For photos whose main subject is one or more people, always use exactly "people".
 
-Describe only observable properties. Do not judge story importance or recommend layouts.
+Describe observable properties objectively. The ONLY subjective judgment allowed is keepsake_interest (memorability). Do not recommend layouts.
 Return ONLY the JSON. No markdown. No explanations. No code blocks."""
     }
 

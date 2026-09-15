@@ -22,6 +22,11 @@ class PhotoSelector(
 ) {
     private val logger = LoggerFactory.getLogger(PhotoSelector::class.java)
 
+    companion object {
+        // subjectType values that mark a photo as people-focused (exempt from the repeat-subject cap).
+        private val PEOPLE_SUBJECT_TYPES = setOf("person", "couple", "group")
+    }
+
     /**
      * Main entry point: selects photos for a photobook.
      *
@@ -44,18 +49,28 @@ class PhotoSelector(
         logger.info("After burst deduplication: ${dedupedPhotos.size} photos")
         log.add("After burst deduplication: ${dedupedPhotos.size} photos (removed ${qualityPhotos.size - dedupedPhotos.size})")
 
+        // Phase 2b: Repeat-subject cap. Near-dup dedup relies on noisy exact-match fields, so the
+        // same non-people subject shot many times across a session (e.g. 8 coconut drinks) can
+        // still slip through as separate "distinct" frames. Cap each non-people primarySubject to
+        // its best few. People are exempt — a recurring person across activities is desired.
+        val cappedPhotos = capRepeatedSubjects(dedupedPhotos, diversityConfig.maxSameSubject)
+        if (cappedPhotos.size < dedupedPhotos.size) {
+            logger.info("After repeat-subject cap: ${cappedPhotos.size} photos")
+            log.add("After repeat-subject cap: ${cappedPhotos.size} photos (removed ${dedupedPhotos.size - cappedPhotos.size})")
+        }
+
         // Phase 3: Adaptive selection — keep all photos up to 200 (50 pages × 4 per page max).
         // Above 200, apply diversity scoring to pick the best spread.
         // If quality filter + dedup dropped us below 50, relax: skip quality filter and dedup again.
         val maxPhotos = 200
         val minPhotos = 50
         val selectedPhotos = when {
-            dedupedPhotos.size >= maxPhotos ->
-                selectPhotos(dedupedPhotos, scoringWeights, diversityConfig.copy(targetPhotos = maxPhotos))
-            dedupedPhotos.size >= minPhotos ->
-                dedupedPhotos
+            cappedPhotos.size >= maxPhotos ->
+                selectPhotos(cappedPhotos, scoringWeights, diversityConfig.copy(targetPhotos = maxPhotos))
+            cappedPhotos.size >= minPhotos ->
+                cappedPhotos
             else -> {
-                log.add("Only ${dedupedPhotos.size} photos after quality filter; relaxing constraints to reach $minPhotos pages")
+                log.add("Only ${cappedPhotos.size} photos after quality filter; relaxing constraints to reach $minPhotos pages")
                 logger.info("Below minimum page count; falling back to dedup-only selection")
                 val fallback = dedupeBursts(photos, burstConfig)
                 val fallbackPhotos = if (fallback.size >= minPhotos) {
@@ -101,6 +116,10 @@ class PhotoSelector(
             val passesBlur = signals.blurScore <= thresholds.maxBlurScore
             val passesDimension = metadata.width >= thresholds.minDimension &&
                                  metadata.height >= thresholds.minDimension
+            // Drop clearly mundane/utility shots (bike lock, shoes, storefronts, a lone coffee
+            // cup) that are technically fine but no one would keep. keepsakeInterest is the only
+            // signal that separates these from photogenic shots of similar aesthetic score.
+            val passesKeepsake = signals.keepsakeInterest >= thresholds.minKeepsakeInterest
             // Drop documentary shots (menus, receipts, tickets, signage, screenshots…) — the
             // vision model labels them a real scene (often "food"), and their sharpness can
             // otherwise ride them into the book over more photogenic images.
@@ -118,8 +137,11 @@ class PhotoSelector(
             if (excludedObject != null) {
                 logger.debug("Filtered ${photo.id}: documentary object '$excludedObject'")
             }
+            if (!passesKeepsake) {
+                logger.debug("Filtered ${photo.id}: keepsakeInterest ${signals.keepsakeInterest} < ${thresholds.minKeepsakeInterest} (mundane/utility)")
+            }
 
-            passesAesthetic && passesBlur && passesDimension && excludedObject == null
+            passesAesthetic && passesBlur && passesDimension && excludedObject == null && passesKeepsake
         }
     }
 
@@ -204,10 +226,15 @@ class PhotoSelector(
             "night" -> 0.6
             else -> 0.5
         }
-        return s.aestheticScore * scoringWeights.aestheticWeight +
+        val baseQuality = s.aestheticScore * scoringWeights.aestheticWeight +
             (1.0 - s.blurScore) * scoringWeights.sharpnessWeight +
             orientation * scoringWeights.orientationPreference +
             lighting * scoringWeights.lightingPreference
+        // Memorability penalty: a low-keepsake shot that survived the filter still ranks below a
+        // more memorable one within its cluster/event. Scales quality to [0.4x .. 1.0x] over
+        // keepsakeInterest, so a mundane-but-crisp frame never out-ranks the real memory beside it.
+        val keepsakeMultiplier = 0.4 + 0.6 * s.keepsakeInterest.coerceIn(0.0, 1.0)
+        return baseQuality * keepsakeMultiplier
     }
 
     private fun objectJaccard(a: List<String>, b: List<String>): Double {
@@ -216,6 +243,34 @@ class PhotoSelector(
         val sb = b.toSet()
         val union = sa.union(sb).size.toDouble()
         return if (union == 0.0) 0.0 else sa.intersect(sb).size / union
+    }
+
+    /**
+     * Keeps at most [maxPerSubject] of the strongest photos for each non-people [primarySubject],
+     * dropping the rest as repetitive. People are exempt (a recurring person across the trip is
+     * desired, and the vision model can't tell individuals apart anyway); photos with no
+     * primarySubject are left untouched. Input order is otherwise preserved.
+     */
+    private fun capRepeatedSubjects(photos: List<Photo>, maxPerSubject: Int): List<Photo> {
+        if (maxPerSubject <= 0) return photos
+        // Rank so the best few of each subject survive; the dropped set is then removed by identity.
+        val counts = HashMap<String, Int>()
+        val dropped = HashSet<Photo>()
+        for (photo in photos.sortedByDescending { rankScore(it) }) {
+            val s = photo.signals ?: continue
+            val subject = s.primarySubject?.lowercase()?.trim()
+            if (subject.isNullOrBlank() || isPeopleSubject(s)) continue
+            val n = counts.getOrDefault(subject, 0)
+            if (n >= maxPerSubject) dropped.add(photo) else counts[subject] = n + 1
+        }
+        return if (dropped.isEmpty()) photos else photos.filter { it !in dropped }
+    }
+
+    /** True when the photo is primarily about one or more people, which exempts it from the repeat cap. */
+    private fun isPeopleSubject(s: com.atlaso.domain.photo.PhotoSignals): Boolean {
+        return s.subjectType in PEOPLE_SUBJECT_TYPES ||
+            s.sceneType == "people" ||
+            s.primarySubject?.lowercase()?.trim() == "people"
     }
 
     /**
@@ -456,6 +511,10 @@ data class QualityThresholds(
     val minAestheticScore: Double = 0.4,
     val maxBlurScore: Double = 0.6,
     val minDimension: Int = 1200,
+    // Drop shots the vision model flags as clearly mundane/utility (bike lock, shoes, storefront,
+    // lone coffee cup). Set low so only the obviously-unkeepable is dropped; anything ambiguous or
+    // analysed before this signal existed (neutral default 0.5) survives.
+    val minKeepsakeInterest: Double = 0.3,
     // Documentary / non-photogenic subjects to drop outright. Single-word entries match whole
     // tokens; multi-word entries match as a substring. Deliberately excludes bare "sign",
     // "phone", "book" — those are too often legitimate travel/candid shots.
@@ -506,7 +565,9 @@ data class DiversityConfig(
     // Every activity/event keeps at least this many of its strongest shots, so no moment is dropped.
     val floorPerEvent: Int = 1,
     // No single event may exceed this fraction of the book, so one burst-heavy activity can't dominate.
-    val maxEventShare: Double = 0.22
+    val maxEventShare: Double = 0.22,
+    // Max photos of the same non-people primarySubject kept across the whole book (e.g. coconut drink).
+    val maxSameSubject: Int = 3
 )
 
 /**

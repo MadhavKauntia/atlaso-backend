@@ -124,7 +124,9 @@ class PhotoAnalysisService(
             subjectProminence = response.subjectProminence,
             settingScope = response.settingScope,
             backgroundComplexity = response.backgroundComplexity,
-            negativeSpace = response.negativeSpace
+            negativeSpace = response.negativeSpace,
+            keepsakeInterest = response.keepsakeInterest,
+            primarySubject = response.primarySubject?.lowercase()?.trim()?.ifBlank { null }
         )
     }
 }

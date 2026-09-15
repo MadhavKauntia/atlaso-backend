@@ -92,10 +92,12 @@ Grouping threshold: 0.55. Groups sorted chronologically by median `takenAt`. Sin
 | `mood` | String | joyful / serene / dramatic / adventurous |
 | `depthOfField` | String | shallow / deep |
 | `isBlurry` | Boolean | Derived: blurScore > 0.6 |
+| `keepsakeInterest` | Double 0–1 | Memorability: 0 = mundane/utility (bike lock, shoes, storefront), 1 = strong travel keepsake. `PhotoSelector` hard-drops < 0.3 and penalises ranking. Default 0.5 (neutral) so pre-signal photos survive. |
+| `primarySubject` | String? | Short stable noun-phrase ("coconut drink", "rice terrace"); `"people"` for person shots. `PhotoSelector` caps the same **non-people** subject to 3 across the book. |
 
 All fields have safe defaults — photos analyzed before new fields were added deserialize without errors.
 
-The vision prompt is in `VISION_MODEL_PROMPT.md` and embedded in `OpenAIVisionClient`. `maxTokens = 400`, `temperature = 0.3`.
+The vision prompt is in `VISION_MODEL_PROMPT.md` and embedded in `OpenAIVisionClient`. `maxTokens = 600`, `temperature = 0.3`.
 
 ## Vision Model Retry Logic
 

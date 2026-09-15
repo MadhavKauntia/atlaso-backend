@@ -21,5 +21,15 @@ data class PhotoSignals(
     val subjectProminence: String = "medium",
     val settingScope: String = "subject",
     val backgroundComplexity: String = "medium",
-    val negativeSpace: String = "low"
+    val negativeSpace: String = "low",
+    // Selection signals (V3). Both default to neutral so photos analyzed before these existed
+    // survive the selector unpenalised until re-analysed.
+    // keepsakeInterest: how much this reads as a memorable travel keepsake (temples, vistas,
+    // people, food-as-experience) vs a mundane/utility snapshot (bike lock, shoes, a receipt of
+    // life). 0 = utility, 1 = strong keepsake. Drives a hard-drop + ranking penalty.
+    val keepsakeInterest: Double = 0.5,
+    // primarySubject: a short, stable noun-phrase naming the single main subject
+    // ("coconut drink", "rice terrace", "temple gateway"). Used to cap repeats of the SAME
+    // non-people subject across the book. Null when unknown; "people" for person-focused shots.
+    val primarySubject: String? = null
 ) : Serializable

@@ -57,12 +57,20 @@ data class PhotoAnalysisResponse(
     val backgroundComplexity: String = "medium", // low | medium | high
 
     @JsonProperty("negative_space")
-    val negativeSpace: String = "low"         // low | medium | high
+    val negativeSpace: String = "low",        // low | medium | high
+
+    // Selection signals (V3).
+    @JsonProperty("keepsake_interest")
+    val keepsakeInterest: Double = 0.5,       // 0 = mundane/utility, 1 = strong travel keepsake
+
+    @JsonProperty("primary_subject")
+    val primarySubject: String? = null        // short stable noun-phrase; "people" for person shots
 ) {
     init {
         require(aestheticScore in 0.0..1.0) { "aesthetic_score must be between 0.0 and 1.0" }
         require(blurScore in 0.0..1.0) { "blur_score must be between 0.0 and 1.0" }
         require(facesCount >= 0) { "faces_count must be non-negative" }
+        require(keepsakeInterest in 0.0..1.0) { "keepsake_interest must be between 0.0 and 1.0" }
     }
 }
 
