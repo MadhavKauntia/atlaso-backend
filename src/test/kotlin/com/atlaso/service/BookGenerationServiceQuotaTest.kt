@@ -126,6 +126,22 @@ class BookGenerationServiceQuotaTest {
     }
 
     @Test
+    fun `regeneration during an in-flight generation returns that book and starts no worker`() {
+        val t = trip(chargedAt = Instant.now())
+        val inFlight = book(1, t, BookStatus.GENERATING)
+        whenever(bookRepository.findByIdAndTripUserId(inFlight.id!!, userId)).thenReturn(Optional.of(inFlight))
+        whenever(tripRepository.findByIdForUpdate(tripId)).thenReturn(Optional.of(t))
+        whenever(bookRepository.findByTripIdOrderByVersionDesc(tripId)).thenReturn(listOf(inFlight))
+
+        val result = service.startRegeneration(inFlight.id!!, userId)
+
+        assertEquals(inFlight.id, result.id)
+        verify(bookRepository, never()).save(any<Book>())
+        verify(processor, never()).process(any(), any())
+        verify(userRepository, never()).tryConsumeFreePreview(any())
+    }
+
+    @Test
     fun `markFailed flips status once and never touches the quota (no refund)`() {
         val v1 = book(1, trip(chargedAt = Instant.now()), BookStatus.GENERATING)
         whenever(bookRepository.markFailedIfGenerating(v1.id!!, BookStatus.GENERATING, BookStatus.FAILED)).thenReturn(1)

@@ -115,14 +115,19 @@ class BookGenerationService(
         // Same per-trip lock as first generation, so a regeneration can't race another
         // generation on the next version number.
         val trip = tripRepository.findByIdForUpdate(tripId).orElseThrow { IllegalStateException("Trip not found: $tripId") }
-        val nextVersion = (bookRepository.findByTripIdOrderByVersionDesc(tripId).firstOrNull()?.version ?: 0) + 1
+        // If a generation is already in flight for this trip, return it instead of starting a
+        // second worker: the lock is released once each placeholder commits, but the async worker
+        // keeps running without it, so spamming regenerate would otherwise re-analyse the same
+        // photos in parallel (duplicate paid vision calls the version constraint can't stop).
+        val latest = bookRepository.findByTripIdOrderByVersionDesc(tripId).firstOrNull()
+        if (latest != null && latest.status == BookStatus.GENERATING) return latest
         // Normally a no-op (the trip was reserved at its first generation). Kept so a trip that
         // somehow never reserved still can't regenerate free of charge.
         reservePreviewIfNeeded(trip, userId)
         val book = bookRepository.save(
             Book(
                 trip = trip,
-                version = nextVersion,
+                version = (latest?.version ?: 0) + 1,
                 title = existing.title,
                 subtitle = existing.subtitle,
                 status = BookStatus.GENERATING,
