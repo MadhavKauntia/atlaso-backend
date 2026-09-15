@@ -21,6 +21,11 @@ class RateLimitInterceptor(
     private val limiter: RateLimiter,
     @Value("\${atlaso.ratelimit.generate-per-hour:40}") private val generatePerHour: Int,
     @Value("\${atlaso.ratelimit.upload-per-hour:60}") private val uploadPerHour: Int,
+    // The presigned flow issues ONE initiate + ONE confirm PER PHOTO, and a book holds up to
+    // MAX_PHOTOS_PER_TRIP (1000). So the per-photo endpoints need a ceiling well above a full
+    // book (with retry headroom); a low shared limit would 429 every normal upload. Storage is
+    // still bounded by the atomic per-trip count/byte quota, so this stays safe.
+    @Value("\${atlaso.ratelimit.photos-per-hour:3000}") private val photosPerHour: Int,
     @Value("\${atlaso.ratelimit.order-per-hour:30}") private val orderPerHour: Int,
 ) : HandlerInterceptor {
 
@@ -36,9 +41,11 @@ class RateLimitInterceptor(
             Rule("POST", "/api/books/*/regenerate", generatePerHour),
             Rule("POST", "/api/payments/create-order", orderPerHour),
             // Public/guest endpoints (unauthenticated) — keyed by client IP to curb abuse.
+            // Trip creation stays modest; the per-photo initiate/confirm calls get a much higher
+            // ceiling since a single book upload makes one of each per photo (up to 1000).
             Rule("POST", "/api/trips", uploadPerHour),
-            Rule("POST", "/api/trips/*/photos/initiate", uploadPerHour),
-            Rule("POST", "/api/trips/*/photos/confirm", uploadPerHour),
+            Rule("POST", "/api/trips/*/photos/initiate", photosPerHour),
+            Rule("POST", "/api/trips/*/photos/confirm", photosPerHour),
         )
     }
 
