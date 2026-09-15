@@ -49,16 +49,21 @@ class BookGenerationService(
      * of vision analysis. The client polls GET /books/{id} until status flips to
      * READY_FOR_PREVIEW (or FAILED).
      */
-    fun startGeneration(tripId: UUID, userId: UUID): Book {
+    fun startGeneration(tripId: UUID, userId: UUID, coverCountry: String? = null, subtitle: String? = null): Book {
         val trip = tripService.getTrip(tripId, userId)
         val nextVersion = (bookRepository.findByTripIdOrderByVersionDesc(tripId).firstOrNull()?.version ?: 0) + 1
+        // Persist the cover country at creation, so it's committed before the worker runs (which
+        // reloads and preserves it) and before the ready-email fires — regardless of whether the
+        // client stays on the generating tab to PATCH it later. Without this the cover renders
+        // blank on a cold load from the email link.
         val book = bookRepository.save(
             Book(
                 trip = trip,
                 version = nextVersion,
                 title = trip.name,
-                subtitle = trip.destination,
-                status = BookStatus.GENERATING
+                subtitle = subtitle?.takeIf { it.isNotBlank() } ?: trip.destination,
+                status = BookStatus.GENERATING,
+                coverCountry = coverCountry?.takeIf { it.isNotBlank() }
             )
         )
         val bookId = book.id!!

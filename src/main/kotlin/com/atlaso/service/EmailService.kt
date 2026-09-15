@@ -47,7 +47,9 @@ class EmailService(
             logger.warn("Brevo API key not configured — skipping book-ready email for book {}", bookId)
             return
         }
-        val previewUrl = "$appUrl/trips/$tripId/preview?bookId=$bookId"
+        // Link to the trip's latest book (no bookId) so a user who regenerated after this email was
+        // sent lands on their newest version, not the original v1 this notification was fired for.
+        val previewUrl = "$appUrl/trips/$tripId/preview"
         // Route the cover through the public, capability-gated cover endpoint (auth-free, keyed by
         // the book UUID). The per-photo /image endpoint can't be used here — it requires the owner's
         // JWT, which an email client's image request never has.

@@ -21,6 +21,7 @@ data class CoverConfigRequest(
     val subtitle: String? = null
 )
 data class ExportBookRequest(val coverImageBase64: String?, val backImageBase64: String? = null)
+data class GenerateBookRequest(val country: String? = null, val subtitle: String? = null)
 
 @RestController
 @RequestMapping("/api")
@@ -32,12 +33,14 @@ class BookController(
     @PostMapping("/trips/{tripId}/book/generate")
     fun generateBook(
         @PathVariable tripId: UUID,
+        @RequestBody(required = false) body: GenerateBookRequest?,
         @AuthenticationPrincipal jwt: Jwt
     ): ResponseEntity<BookResponse> {
         val userId = UUID.fromString(jwt.subject)
         // Async: returns a GENERATING book immediately; the client polls GET /books/{id}
-        // until status is READY_FOR_PREVIEW (or FAILED).
-        val book = bookGenerationService.startGeneration(tripId, userId)
+        // until status is READY_FOR_PREVIEW (or FAILED). The cover country is persisted now
+        // (at creation) so it survives the user leaving the generating tab.
+        val book = bookGenerationService.startGeneration(tripId, userId, body?.country, body?.subtitle)
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(BookResponse.from(book))
     }
 
