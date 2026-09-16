@@ -44,9 +44,10 @@ class BookGenerationServiceLayoutTest {
     private val bookRepository = mock<BookRepository>()
     private val photoRepository = mock<PhotoRepository>()
     private val pageRepository = mock<PageRepository>()
+    private val tripRepository = mock<TripRepository>()
     private val layoutEngine = mock<LayoutEngine>()
     private val service = BookGenerationService(
-        bookRepository, photoRepository, pageRepository, mock<UserRepository>(), mock<TripRepository>(),
+        bookRepository, photoRepository, pageRepository, mock<UserRepository>(), tripRepository,
         mock<PhotoAnalysisService>(), mock<PhotoSelector>(), layoutEngine, mock<TripService>(),
         mock<BookPlanExplainer>(), mock<EmailService>(), mock<StorageService>(), mock<BookGenerationProcessor>(), false
     )
@@ -67,6 +68,7 @@ class BookGenerationServiceLayoutTest {
         whenever(layoutEngine.getSlotGeometry(any(), any(), any()))
             .thenReturn(Position(0.0, 0.0) to Size(1.0, 1.0))
         whenever(pageRepository.save(any<Page>())).thenAnswer { it.arguments[0] as Page }
+        whenever(tripRepository.findByIdForUpdate(tripId)).thenReturn(Optional.of(trip))
     }
 
     private fun photo(secondsAfterBase: Long, rotation: Int = 0): Photo {
@@ -117,6 +119,8 @@ class BookGenerationServiceLayoutTest {
         assertEquals(Layout.FOUR_GRID, saved.layout)
         // a retained first, then the three earliest *unused* photos by uploadedAt: c(10), d(20), b(30).
         assertEquals(listOf(a.id, c.id, d.id, b.id), saved.slots.map { it.photoId })
+        // Growth takes the trip's pessimistic lock before choosing fillers (dedup vs concurrent grows).
+        verify(tripRepository).findByIdForUpdate(tripId)
     }
 
     @Test
@@ -157,6 +161,8 @@ class BookGenerationServiceLayoutTest {
         assertEquals(Layout.SINGLE_FULL, saved.layout)
         assertEquals(listOf(ids[0]), saved.slots.map { it.photoId })
         verify(photoRepository, never()).findByTripId(any())
+        // No pool read means no need to lock the trip either.
+        verify(tripRepository, never()).findByIdForUpdate(any())
     }
 
     @Test
@@ -181,7 +187,7 @@ class BookGenerationServiceLayoutTest {
     }
 
     @Test
-    fun `another user's page is not found`() {
+    fun `another user's page is not found (404, not 500)`() {
         val a = photo(0)
         // Page owned by a different user.
         val otherUser = User(id = UUID.randomUUID(), googleSub = "g2", email = "c@d.com", name = "C")
@@ -191,7 +197,7 @@ class BookGenerationServiceLayoutTest {
         book.addPage(page)
         whenever(pageRepository.findById(pageId)).thenReturn(Optional.of(page))
 
-        assertThrows(RuntimeException::class.java) {
+        assertThrows(PageNotFoundException::class.java) {
             service.changePageLayout(pageId, Layout.SINGLE_FRAMED, userId)
         }
         verify(pageRepository, never()).save(any<Page>())

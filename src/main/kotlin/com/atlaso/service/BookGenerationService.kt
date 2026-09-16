@@ -25,6 +25,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.util.UUID
 
 class BookNotFoundException(id: UUID) : RuntimeException("Book not found: $id")
+class PageNotFoundException(id: UUID) : RuntimeException("Page not found: $id")
 class NoPhotosAvailableException(tripId: UUID) : RuntimeException("No photos available for trip: $tripId")
 class FreePreviewQuotaExceededException(userId: UUID) : RuntimeException("Free preview quota exhausted for user: $userId")
 class InsufficientPhotosException(val needed: Int, val available: Int) :
@@ -299,9 +300,9 @@ class BookGenerationService(
 
     fun updateSlotOffset(pageId: UUID, slotIndex: Int, offsetX: Double, offsetY: Double, userId: UUID) {
         val page = pageRepository.findById(pageId)
-            .orElseThrow { RuntimeException("Page not found: $pageId") }
+            .orElseThrow { PageNotFoundException(pageId) }
         if (page.book?.trip?.user?.id != userId) {
-            throw RuntimeException("Page not found: $pageId")
+            throw PageNotFoundException(pageId)
         }
         require(slotIndex in page.slots.indices) { "Slot index $slotIndex out of range" }
         val updatedSlots = page.slots.toMutableList()
@@ -316,10 +317,10 @@ class BookGenerationService(
 
     fun updateSlotPhoto(pageId: UUID, slotIndex: Int, photoId: UUID, userId: UUID) {
         val page = pageRepository.findById(pageId)
-            .orElseThrow { RuntimeException("Page not found: $pageId") }
+            .orElseThrow { PageNotFoundException(pageId) }
         val trip = page.book?.trip
         if (trip?.user?.id != userId) {
-            throw RuntimeException("Page not found: $pageId")
+            throw PageNotFoundException(pageId)
         }
         require(slotIndex in page.slots.indices) { "Slot index $slotIndex out of range" }
         // The replacement photo must belong to the same trip.
@@ -354,11 +355,12 @@ class BookGenerationService(
         require(newLayout != Layout.DOUBLE_PAGE_FULL_BLEED) { "Layout $newLayout can't be applied to a single page" }
 
         val page = pageRepository.findById(pageId)
-            .orElseThrow { RuntimeException("Page not found: $pageId") }
+            .orElseThrow { PageNotFoundException(pageId) }
         val book = page.book
         val trip = book?.trip
+        // Don't leak another user's page as anything but "not found".
         if (trip?.user?.id != userId) {
-            throw RuntimeException("Page not found: $pageId")
+            throw PageNotFoundException(pageId)
         }
 
         val targetCount = newLayout.slotCount
@@ -367,6 +369,10 @@ class BookGenerationService(
 
         val extraNeeded = targetCount - retained.size
         val fillers: List<Photo> = if (extraNeeded > 0) {
+            // Serialize concurrent growth on the trip so two pages can't grab the same spare photos
+            // and duplicate a shot. Generation/upload take this same lock; taken before the used-set
+            // read so that read sees any concurrent layout change that already committed.
+            tripRepository.findByIdForUpdate(trip.id!!)
             val usedPhotoIds = book.pages.flatMap { it.slots }.mapTo(mutableSetOf()) { it.photoId }
             val pool = photoRepository.findByTripId(trip.id!!)
                 .filter { it.id !in usedPhotoIds }
