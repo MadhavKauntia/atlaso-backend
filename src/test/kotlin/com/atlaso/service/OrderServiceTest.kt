@@ -29,7 +29,8 @@ class OrderServiceTest {
     private val coupon = mock<CouponService>()
     private val receipt = mock<ReceiptRenderer>()
     private val notifications = mock<OrderNotificationService>()
-    private val svc = OrderService(orderRepo, checkoutRepo, userRepo, tripService, bookGen, payment, coupon, receipt, notifications)
+    private val slackNotifier = mock<SlackNotifier>()
+    private val svc = OrderService(orderRepo, checkoutRepo, userRepo, tripService, bookGen, payment, coupon, receipt, notifications, slackNotifier)
 
     private val tripId = UUID.randomUUID()
     private val userId = UUID.randomUUID()
@@ -94,6 +95,8 @@ class OrderServiceTest {
         assertEquals("COMPLETED", c.status)
         // Receipt + email dispatched (no active tx in the unit test → afterCommit runs inline).
         verify(notifications).sendOrderConfirmation(any())
+        // #orders Slack ping fired for the committed order.
+        verify(slackNotifier).notifyOrder(any())
     }
 
     @Test

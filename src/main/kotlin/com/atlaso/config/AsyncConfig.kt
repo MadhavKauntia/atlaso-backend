@@ -37,4 +37,16 @@ class AsyncConfig {
         executor.initialize()
         return executor
     }
+
+    /** Fire-and-forget pool for best-effort Slack ops alerts (#signups, #orders). */
+    @Bean("slackExecutor")
+    fun slackExecutor(): Executor {
+        val executor = ThreadPoolTaskExecutor()
+        executor.corePoolSize = 1
+        executor.maxPoolSize = 2
+        executor.queueCapacity = 100
+        executor.setThreadNamePrefix("slack-")
+        executor.initialize()
+        return executor
+    }
 }

@@ -30,6 +30,7 @@ class OrderService(
     private val couponService: CouponService,
     private val receiptRenderer: ReceiptRenderer,
     private val orderNotificationService: OrderNotificationService,
+    private val slackNotifier: SlackNotifier,
 ) {
     private val logger = LoggerFactory.getLogger(OrderService::class.java)
 
@@ -121,6 +122,8 @@ class OrderService(
         // Razorpay webhook responds within its 5s budget and no email is sent for an order that
         // ends up rolling back.
         afterCommit { orderNotificationService.sendOrderConfirmation(saved) }
+        // Ping #orders once the order is durably committed.
+        afterCommit { slackNotifier.notifyOrder(saved) }
 
         return saved
     }
