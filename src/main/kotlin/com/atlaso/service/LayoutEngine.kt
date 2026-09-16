@@ -547,7 +547,9 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
         return Page(pageNumber = pageNumber, layout = layout, slots = slots)
     }
 
-    private fun getSlotGeometry(layout: Layout, index: Int, totalSlots: Int): Pair<Position, Size> {
+    /** Slot rectangle (normalised 0–1 position + size) for slot [index] of a [layout]. Pure — also
+     *  reused when the user switches a page's layout on the preview. */
+    fun getSlotGeometry(layout: Layout, index: Int, totalSlots: Int): Pair<Position, Size> {
         return when (layout) {
             Layout.SINGLE_FULL, Layout.HERO_LANDSCAPE, Layout.DOUBLE_PAGE_FULL_BLEED ->
                 Pair(Position(0.0, 0.0), Size(1.0, 1.0))

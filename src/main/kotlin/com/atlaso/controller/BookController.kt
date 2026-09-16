@@ -1,6 +1,7 @@
 package com.atlaso.controller
 
 import com.atlaso.controller.dto.BookResponse
+import com.atlaso.domain.book.Layout
 import com.atlaso.service.BookGenerationService
 import com.atlaso.service.PdfExportService
 import org.springframework.http.HttpHeaders
@@ -14,6 +15,7 @@ import java.util.UUID
 
 data class SlotOffsetRequest(val offsetX: Double, val offsetY: Double)
 data class SlotPhotoRequest(val photoId: UUID)
+data class PageLayoutRequest(val layout: Layout)
 data class CoverConfigRequest(
     val templateId: String? = null,
     val paletteId: String? = null,
@@ -131,6 +133,17 @@ class BookController(
         val userId = UUID.fromString(jwt.subject)
         bookGenerationService.updateSlotPhoto(pageId, slotIndex, body.photoId, userId)
         return ResponseEntity.noContent().build()
+    }
+
+    @PatchMapping("/pages/{pageId}/layout")
+    fun changePageLayout(
+        @PathVariable pageId: UUID,
+        @RequestBody body: PageLayoutRequest,
+        @AuthenticationPrincipal jwt: Jwt
+    ): ResponseEntity<BookResponse> {
+        val userId = UUID.fromString(jwt.subject)
+        val book = bookGenerationService.changePageLayout(pageId, body.layout, userId)
+        return ResponseEntity.ok(BookResponse.from(book))
     }
 
     /**
