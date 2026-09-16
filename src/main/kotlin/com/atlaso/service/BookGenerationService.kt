@@ -4,7 +4,10 @@ import com.atlaso.application.layout.BookPlanExplainer
 import com.atlaso.application.layout.PhotoSelector
 import com.atlaso.domain.book.Book
 import com.atlaso.domain.book.BookStatus
+import com.atlaso.domain.book.Layout
 import com.atlaso.domain.book.PhotoSlot
+import com.atlaso.domain.book.slotCount
+import com.atlaso.domain.photo.Photo
 import com.atlaso.domain.trip.TripStatus
 import com.atlaso.domain.trip.Trip
 import com.atlaso.repository.BookRepository
@@ -22,8 +25,11 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.util.UUID
 
 class BookNotFoundException(id: UUID) : RuntimeException("Book not found: $id")
+class PageNotFoundException(id: UUID) : RuntimeException("Page not found: $id")
 class NoPhotosAvailableException(tripId: UUID) : RuntimeException("No photos available for trip: $tripId")
 class FreePreviewQuotaExceededException(userId: UUID) : RuntimeException("Free preview quota exhausted for user: $userId")
+class InsufficientPhotosException(val needed: Int, val available: Int) :
+    RuntimeException("Not enough unused photos to fill this layout: need $needed more, $available available")
 
 @Service
 @Transactional
@@ -294,9 +300,9 @@ class BookGenerationService(
 
     fun updateSlotOffset(pageId: UUID, slotIndex: Int, offsetX: Double, offsetY: Double, userId: UUID) {
         val page = pageRepository.findById(pageId)
-            .orElseThrow { RuntimeException("Page not found: $pageId") }
+            .orElseThrow { PageNotFoundException(pageId) }
         if (page.book?.trip?.user?.id != userId) {
-            throw RuntimeException("Page not found: $pageId")
+            throw PageNotFoundException(pageId)
         }
         require(slotIndex in page.slots.indices) { "Slot index $slotIndex out of range" }
         val updatedSlots = page.slots.toMutableList()
@@ -311,10 +317,10 @@ class BookGenerationService(
 
     fun updateSlotPhoto(pageId: UUID, slotIndex: Int, photoId: UUID, userId: UUID) {
         val page = pageRepository.findById(pageId)
-            .orElseThrow { RuntimeException("Page not found: $pageId") }
+            .orElseThrow { PageNotFoundException(pageId) }
         val trip = page.book?.trip
         if (trip?.user?.id != userId) {
-            throw RuntimeException("Page not found: $pageId")
+            throw PageNotFoundException(pageId)
         }
         require(slotIndex in page.slots.indices) { "Slot index $slotIndex out of range" }
         // The replacement photo must belong to the same trip.
@@ -331,5 +337,68 @@ class BookGenerationService(
         val updatedPage = page.copy(slots = updatedSlots)
         pageRepository.save(updatedPage)
         logger.info("Replaced slot {}/{} photo with {}", pageId, slotIndex, photoId)
+    }
+
+    /**
+     * Switches a page to [newLayout] and returns the updated book. The photo count is fixed per
+     * layout, so:
+     *  - shrinking keeps the first N photos in order (the rest stay reachable via Replace);
+     *  - growing pulls the extra photos from the trip's unused pool (chronological by upload),
+     *    excluding every photo already placed anywhere in the book so a shot never appears twice —
+     *    and throws [InsufficientPhotosException] when the pool can't cover the new slots;
+     *  - same-count switches keep every photo.
+     * Framing is recentred on every slot because the geometry (and each crop's aspect ratio) changes.
+     */
+    @Transactional
+    fun changePageLayout(pageId: UUID, newLayout: Layout, userId: UUID): Book {
+        // A double-page spread occupies two facing pages; it can't be applied to a single page.
+        require(newLayout != Layout.DOUBLE_PAGE_FULL_BLEED) { "Layout $newLayout can't be applied to a single page" }
+
+        val page = pageRepository.findById(pageId)
+            .orElseThrow { PageNotFoundException(pageId) }
+        val book = page.book
+        val trip = book?.trip
+        // Don't leak another user's page as anything but "not found".
+        if (trip?.user?.id != userId) {
+            throw PageNotFoundException(pageId)
+        }
+
+        val targetCount = newLayout.slotCount
+        // Keep the first min(current, target) photos, in their existing order.
+        val retained = page.slots.take(targetCount)
+
+        val extraNeeded = targetCount - retained.size
+        val fillers: List<Photo> = if (extraNeeded > 0) {
+            // Serialize concurrent growth on the trip so two pages can't grab the same spare photos
+            // and duplicate a shot. Generation/upload take this same lock; taken before the used-set
+            // read so that read sees any concurrent layout change that already committed.
+            tripRepository.findByIdForUpdate(trip.id!!)
+            val usedPhotoIds = book.pages.flatMap { it.slots }.mapTo(mutableSetOf()) { it.photoId }
+            val pool = photoRepository.findByTripId(trip.id!!)
+                .filter { it.id !in usedPhotoIds }
+                .sortedBy { it.uploadedAt }
+            if (pool.size < extraNeeded) throw InsufficientPhotosException(extraNeeded, pool.size)
+            pool.take(extraNeeded)
+        } else emptyList()
+
+        val newSlots = buildList {
+            // Retained photos keep their id + intrinsic rotation; only their frame is recentred.
+            retained.forEachIndexed { index, slot ->
+                val (position, size) = layoutEngine.getSlotGeometry(newLayout, index, targetCount)
+                add(slot.copy(position = position, size = size, offsetX = null, offsetY = null))
+            }
+            fillers.forEachIndexed { i, photo ->
+                val index = retained.size + i
+                val (position, size) = layoutEngine.getSlotGeometry(newLayout, index, targetCount)
+                add(PhotoSlot(photoId = photo.id!!, position = position, size = size, rotation = photo.rotation))
+            }
+        }
+
+        pageRepository.save(page.copy(layout = newLayout, slots = newSlots))
+        logger.info(
+            "Changed page {} layout {} -> {} ({} slots, {} filled from pool)",
+            pageId, page.layout, newLayout, targetCount, fillers.size
+        )
+        return getBookForUser(book.id!!, userId)
     }
 }

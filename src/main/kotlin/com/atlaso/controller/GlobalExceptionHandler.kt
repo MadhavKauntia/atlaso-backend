@@ -4,8 +4,10 @@ import com.atlaso.controller.dto.ErrorResponse
 import com.atlaso.service.BookNotFoundException
 import com.atlaso.service.FreePreviewQuotaExceededException
 import com.atlaso.service.GuestTokenException
+import com.atlaso.service.InsufficientPhotosException
 import com.atlaso.service.InvalidGoogleTokenException
 import com.atlaso.service.NoPhotosAvailableException
+import com.atlaso.service.PageNotFoundException
 import com.atlaso.service.PhotoNotFoundException
 import com.atlaso.service.TripNotFoundException
 import jakarta.servlet.http.HttpServletRequest
@@ -36,9 +38,21 @@ class GlobalExceptionHandler {
         return buildResponse(HttpStatus.NOT_FOUND, ex.message, request)
     }
 
+    @ExceptionHandler(PageNotFoundException::class)
+    fun handlePageNotFound(ex: PageNotFoundException, request: HttpServletRequest): ResponseEntity<ErrorResponse> {
+        return buildResponse(HttpStatus.NOT_FOUND, ex.message, request)
+    }
+
     @ExceptionHandler(NoPhotosAvailableException::class)
     fun handleNoPhotos(ex: NoPhotosAvailableException, request: HttpServletRequest): ResponseEntity<ErrorResponse> {
         return buildResponse(HttpStatus.BAD_REQUEST, ex.message, request)
+    }
+
+    // 409 when a layout switch needs more spare photos than the trip has left. The internal message
+    // carries counts, so we send a fixed, actionable message the client can show verbatim.
+    @ExceptionHandler(InsufficientPhotosException::class)
+    fun handleInsufficientPhotos(ex: InsufficientPhotosException, request: HttpServletRequest): ResponseEntity<ErrorResponse> {
+        return buildResponse(HttpStatus.CONFLICT, "Not enough spare photos to switch to this layout. Pick a layout with fewer photos.", request)
     }
 
     // 402 so the client can distinguish "out of free previews" from other errors and prompt an order.
