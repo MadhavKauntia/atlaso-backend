@@ -299,7 +299,7 @@ class BookGenerationService(
     }
 
     fun updateSlotOffset(pageId: UUID, slotIndex: Int, offsetX: Double, offsetY: Double, userId: UUID) {
-        val page = pageRepository.findById(pageId)
+        val page = pageRepository.findByIdForUpdate(pageId)
             .orElseThrow { PageNotFoundException(pageId) }
         if (page.book?.trip?.user?.id != userId) {
             throw PageNotFoundException(pageId)
@@ -316,7 +316,7 @@ class BookGenerationService(
     }
 
     fun updateSlotPhoto(pageId: UUID, slotIndex: Int, photoId: UUID, userId: UUID) {
-        val page = pageRepository.findById(pageId)
+        val page = pageRepository.findByIdForUpdate(pageId)
             .orElseThrow { PageNotFoundException(pageId) }
         val trip = page.book?.trip
         if (trip?.user?.id != userId) {
@@ -354,7 +354,9 @@ class BookGenerationService(
         // A double-page spread occupies two facing pages; it can't be applied to a single page.
         require(newLayout != Layout.DOUBLE_PAGE_FULL_BLEED) { "Layout $newLayout can't be applied to a single page" }
 
-        val page = pageRepository.findById(pageId)
+        // Lock the page like the other slot mutations, so a concurrent swap/offset/photo edit
+        // can't be read stale here and then overwritten by this layout change.
+        val page = pageRepository.findByIdForUpdate(pageId)
             .orElseThrow { PageNotFoundException(pageId) }
         val book = page.book
         val trip = book?.trip
@@ -400,5 +402,56 @@ class BookGenerationService(
             pageId, page.layout, newLayout, targetCount, fillers.size
         )
         return getBookForUser(book.id!!, userId)
+    }
+
+    /**
+     * Swaps the photos in two slots of the same book (drag-to-swap on the preview). Exchanges each
+     * slot's photo content (photoId + rotation + caption) while keeping each slot's own geometry,
+     * and recentres both frames since the target aspect ratios differ. Handles same-page and
+     * cross-page swaps in one transaction.
+     */
+    @Transactional
+    fun swapSlots(pageAId: UUID, slotA: Int, pageBId: UUID, slotB: Int, userId: UUID) {
+        // Row-lock the affected page(s) up front, in deterministic id order, so overlapping
+        // fire-and-forget swaps can't lost-update each other. Same page id => a single lock.
+        val locked = (if (pageAId == pageBId) listOf(pageAId) else listOf(pageAId, pageBId).sorted())
+            .associateWith { id -> pageRepository.findByIdForUpdate(id).orElseThrow { PageNotFoundException(id) } }
+        val pageA = locked.getValue(pageAId)
+        val pageB = locked.getValue(pageBId)
+
+        // Both slots must live in the same book, owned by the caller. Anything else reads as not-found.
+        val bookA = pageA.book ?: throw PageNotFoundException(pageAId)
+        val bookB = pageB.book ?: throw PageNotFoundException(pageBId)
+        if (bookA.trip.user?.id != userId || bookB.trip.user?.id != userId || bookA.id != bookB.id) {
+            throw PageNotFoundException(pageBId)
+        }
+        require(slotA in pageA.slots.indices) { "Slot index $slotA out of range" }
+        require(slotB in pageB.slots.indices) { "Slot index $slotB out of range" }
+        if (pageAId == pageBId && slotA == slotB) return // no-op
+
+        val a = pageA.slots[slotA]
+        val b = pageB.slots[slotB]
+        // Move source's photo into target's slot: keep target's position/size, take the photo's
+        // content, and recentre the crop (offsets null) since the new slot's shape differs.
+        fun place(target: PhotoSlot, source: PhotoSlot) = target.copy(
+            photoId = source.photoId,
+            rotation = source.rotation,
+            caption = source.caption,
+            offsetX = null,
+            offsetY = null
+        )
+
+        if (pageAId == pageBId) {
+            val slots = pageA.slots.toMutableList()
+            slots[slotA] = place(a, b)
+            slots[slotB] = place(b, a)
+            pageRepository.save(pageA.copy(slots = slots))
+        } else {
+            val slotsA = pageA.slots.toMutableList().also { it[slotA] = place(a, b) }
+            val slotsB = pageB.slots.toMutableList().also { it[slotB] = place(b, a) }
+            pageRepository.save(pageA.copy(slots = slotsA))
+            pageRepository.save(pageB.copy(slots = slotsB))
+        }
+        logger.info("Swapped slot {}/{} with {}/{}", pageAId, slotA, pageBId, slotB)
     }
 }

@@ -16,6 +16,7 @@ import java.util.UUID
 data class SlotOffsetRequest(val offsetX: Double, val offsetY: Double)
 data class SlotPhotoRequest(val photoId: UUID)
 data class PageLayoutRequest(val layout: Layout)
+data class SlotSwapRequest(val pageAId: UUID, val slotA: Int, val pageBId: UUID, val slotB: Int)
 data class CoverConfigRequest(
     val templateId: String? = null,
     val paletteId: String? = null,
@@ -144,6 +145,16 @@ class BookController(
         val userId = UUID.fromString(jwt.subject)
         val book = bookGenerationService.changePageLayout(pageId, body.layout, userId)
         return ResponseEntity.ok(BookResponse.from(book))
+    }
+
+    @PatchMapping("/slots/swap")
+    fun swapSlots(
+        @RequestBody body: SlotSwapRequest,
+        @AuthenticationPrincipal jwt: Jwt
+    ): ResponseEntity<Void> {
+        val userId = UUID.fromString(jwt.subject)
+        bookGenerationService.swapSlots(body.pageAId, body.slotA, body.pageBId, body.slotB, userId)
+        return ResponseEntity.noContent().build()
     }
 
     /**

@@ -94,7 +94,7 @@ class BookGenerationServiceLayoutTest {
         val book = Book(id = bookId, trip = trip, version = 1, title = "Bali", status = BookStatus.READY_FOR_PREVIEW)
         val page = Page(id = pageId, book = book, pageNumber = 2, layout = layout, slots = slots)
         book.addPage(page)
-        whenever(pageRepository.findById(pageId)).thenReturn(Optional.of(page))
+        whenever(pageRepository.findByIdForUpdate(pageId)).thenReturn(Optional.of(page))
         whenever(bookRepository.findByIdAndTripUserId(bookId, userId)).thenReturn(Optional.of(book))
         return page
     }
@@ -195,7 +195,7 @@ class BookGenerationServiceLayoutTest {
         val book = Book(id = bookId, trip = otherTrip, version = 1, title = "X", status = BookStatus.READY_FOR_PREVIEW)
         val page = Page(id = pageId, book = book, pageNumber = 2, layout = Layout.SINGLE_FULL, slots = listOf(slot(a.id!!)))
         book.addPage(page)
-        whenever(pageRepository.findById(pageId)).thenReturn(Optional.of(page))
+        whenever(pageRepository.findByIdForUpdate(pageId)).thenReturn(Optional.of(page))
 
         assertThrows(PageNotFoundException::class.java) {
             service.changePageLayout(pageId, Layout.SINGLE_FRAMED, userId)
