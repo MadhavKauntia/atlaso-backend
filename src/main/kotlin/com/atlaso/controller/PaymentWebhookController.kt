@@ -102,6 +102,15 @@ class PaymentWebhookController(
 
         return try {
             val order = orderService.recordPaidOrder(checkout, paymentId)
+            if (checkout.status == "CONFLICT") {
+                // Payment captured for a trip that already has an order; durably flagged for refund.
+                // Ack so Razorpay stops retrying — the CONFLICT checkout is the reconciliation record.
+                logger.error(
+                    "Razorpay webhook: payment {} conflicts with existing order ATL-{} on trip {} — flagged CONFLICT for refund [event={}]",
+                    paymentId, order.number, checkout.tripId, trace,
+                )
+                return ResponseEntity.ok(mapOf("status" to "conflict: flagged for refund"))
+            }
             logger.info(
                 "Razorpay webhook recorded order ATL-{} [event={}, trip={}, payment={}]",
                 order.number, trace, checkout.tripId, paymentId,

@@ -68,7 +68,12 @@ data class Checkout(
     val phone: String? = null,
 
     @Column(nullable = false, length = 16)
-    var status: String = "PENDING", // PENDING | COMPLETED
+    var status: String = "PENDING", // PENDING | COMPLETED | CONFLICT
+
+    /** The captured payment id when this checkout is CONFLICT (a charge on an already-ordered trip),
+     *  kept so orphaned charges are queryable for refund/reconciliation. */
+    @Column(name = "razorpay_payment_id", length = 64)
+    var razorpayPaymentId: String? = null,
 
     @Column(name = "created_at", nullable = false, updatable = false)
     val createdAt: Instant = Instant.now(),

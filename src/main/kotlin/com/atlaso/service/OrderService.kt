@@ -80,11 +80,16 @@ class OrderService(
         // between the early guard above and acquiring the lock.
         orderRepository.findByRazorpayPaymentId(razorpayPaymentId)?.let { return it }
         // A different order already finalized this trip (a free order, or another payment). Don't
-        // create a second one. This payment WAS captured, so flag it loudly for reconciliation/refund.
+        // create a second one. The payment WAS captured, so record it durably: mark the checkout
+        // CONFLICT and store the captured payment id (queryable for refund/reconciliation), and
+        // signal the caller via checkout.status so it never reports this as a successful order.
         orderRepository.findFirstByTripIdOrderByCreatedAtDesc(tripId)?.let { existing ->
+            checkout.status = "CONFLICT"
+            checkout.razorpayPaymentId = razorpayPaymentId
+            checkoutRepository.save(checkout)
             logger.error(
-                "Captured payment {} for trip {} which already has order ATL-{}; not creating a second order — likely needs a refund",
-                razorpayPaymentId, tripId, existing.number
+                "Captured payment {} conflicts with existing order ATL-{} on trip {}; checkout {} flagged CONFLICT for refund",
+                razorpayPaymentId, existing.number, tripId, checkout.id
             )
             return existing
         }
@@ -229,6 +234,12 @@ class OrderService(
 
         return saved
     }
+
+    /** Whether [tripId] already has a finalized order — used by create-order to refuse starting a
+     *  second checkout once a trip is ordered. */
+    @Transactional(readOnly = true)
+    fun hasOrderForTrip(tripId: UUID): Boolean =
+        orderRepository.findFirstByTripIdOrderByCreatedAtDesc(tripId) != null
 
     /** The recorded order for a Razorpay payment id, if one exists. Used by the /verify and
      *  webhook callers to distinguish "the other path already inserted this payment" from an

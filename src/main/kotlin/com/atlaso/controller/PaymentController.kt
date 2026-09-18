@@ -50,6 +50,12 @@ class PaymentController(
         // Ownership — you can only pay for your own trip (throws → 404 if not).
         tripService.getTrip(request.tripId, userId)
 
+        // One order per trip: refuse to start a second checkout once the trip is already ordered, so
+        // a stray later capture can't conflict with an existing order.
+        if (orderService.hasOrderForTrip(request.tripId)) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(mapOf("error" to "This trip has already been ordered."))
+        }
+
         // Validate shipping server-side BEFORE creating the Razorpay order — the webhook records
         // an order straight from the Checkout, so an incomplete/invalid address must never make
         // it to a payment. The client's own validation is not trusted.
@@ -160,7 +166,19 @@ class PaymentController(
             // flips the trip to ORDERED, and closes the checkout — all in one transaction.
             // Shipping is read from the checkout (persisted at create-order time).
             orderService.recordPaidOrder(checkout, paymentId)
-            ResponseEntity.ok(mapOf("verified" to true))
+            if (checkout.status == "CONFLICT") {
+                // The trip already had an order; the payment was captured and is flagged for refund.
+                // Report a distinct conflict, not success.
+                ResponseEntity.status(HttpStatus.CONFLICT).body(
+                    mapOf(
+                        "verified" to false,
+                        "alreadyOrdered" to true,
+                        "error" to "This trip already has an order. Your payment will be refunded — if you don't see it shortly, please contact support.",
+                    )
+                )
+            } else {
+                ResponseEntity.ok(mapOf("verified" to true))
+            }
         } catch (ex: DataIntegrityViolationException) {
             // Could be the webhook recording this exact payment concurrently (fine), OR an
             // unrelated constraint failure (no order). Only report success if the order exists.
