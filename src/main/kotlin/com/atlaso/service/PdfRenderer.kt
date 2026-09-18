@@ -136,8 +136,9 @@ class PdfRenderer {
         document.addPage(page)
 
         PDPageContentStream(document, page).use { cs ->
-            // White background
-            cs.setNonStrokingColor(1f, 1f, 1f)
+            // Cream paper background (#f3ead8). Shows through as the mat/gutter between matted
+            // multi-image slots, matching the preview's page colour.
+            cs.setNonStrokingColor(0.953f, 0.918f, 0.847f)
             cs.addRect(0f, 0f, PAGE_WIDTH, PAGE_HEIGHT)
             cs.fill()
 

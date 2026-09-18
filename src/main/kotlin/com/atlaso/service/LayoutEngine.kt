@@ -547,8 +547,30 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
         return Page(pageNumber = pageNumber, layout = layout, slots = slots)
     }
 
+    // Multi-image layouts get a subtle cream mat around every photo. ~2% of page height, widened
+    // horizontally to the book's portrait trim (6.9×9.8) so the gutter prints an even thickness.
+    private val gutterY = 0.02
+    private val gutterX = 0.02 * (9.8 / 6.9)
+
+    /**
+     * Insets an edge-to-edge cell so every photo floats on a uniform cream margin: a full gutter on
+     * the page's outer edges and a half-gutter on each shared interior edge (so interior gutters end
+     * up the same thickness as the outer margins).
+     */
+    private fun mat(pos: Position, size: Size): Pair<Position, Size> {
+        val eps = 1e-6
+        val l = pos.x; val r = pos.x + size.width
+        val t = pos.y; val b = pos.y + size.height
+        val nl = l + if (l <= eps) gutterX else gutterX / 2
+        val nr = r - if (r >= 1.0 - eps) gutterX else gutterX / 2
+        val nt = t + if (t <= eps) gutterY else gutterY / 2
+        val nb = b - if (b >= 1.0 - eps) gutterY else gutterY / 2
+        return Pair(Position(nl, nt), Size(nr - nl, nb - nt))
+    }
+
     /** Slot rectangle (normalised 0–1 position + size) for slot [index] of a [layout]. Pure — also
-     *  reused when the user switches a page's layout on the preview. */
+     *  reused when the user switches a page's layout on the preview. Single-image layouts stay
+     *  full-bleed; multi-image layouts are matted (see [mat]). */
     fun getSlotGeometry(layout: Layout, index: Int, totalSlots: Int): Pair<Position, Size> {
         return when (layout) {
             Layout.SINGLE_FULL, Layout.HERO_LANDSCAPE, Layout.DOUBLE_PAGE_FULL_BLEED ->
@@ -557,26 +579,20 @@ class LayoutEngine(private val photoGrouper: PhotoGrouper) {
             Layout.SINGLE_FRAMED ->
                 Pair(Position(0.10, 0.08), Size(0.80, 0.84)) // generous white margin
 
-            Layout.TWO_HORIZONTAL -> {
-                val y = index * 0.5
-                Pair(Position(0.0, y), Size(1.0, 0.5))
-            }
+            Layout.TWO_HORIZONTAL -> mat(Position(0.0, index * 0.5), Size(1.0, 0.5))
 
-            Layout.TWO_VERTICAL -> {
-                val x = index * 0.5
-                Pair(Position(x, 0.0), Size(0.5, 1.0))
-            }
+            Layout.TWO_VERTICAL -> mat(Position(index * 0.5, 0.0), Size(0.5, 1.0))
 
             Layout.THREE_GRID -> when (index) {
-                0 -> Pair(Position(0.0, 0.0), Size(1.0, 0.5))
-                1 -> Pair(Position(0.0, 0.5), Size(0.5, 0.5))
-                else -> Pair(Position(0.5, 0.5), Size(0.5, 0.5))
+                0 -> mat(Position(0.0, 0.0), Size(1.0, 0.5))
+                1 -> mat(Position(0.0, 0.5), Size(0.5, 0.5))
+                else -> mat(Position(0.5, 0.5), Size(0.5, 0.5))
             }
 
             Layout.FOUR_GRID -> {
                 val x = (index % 2) * 0.5
                 val y = (index / 2) * 0.5
-                Pair(Position(x.toDouble(), y.toDouble()), Size(0.5, 0.5))
+                mat(Position(x.toDouble(), y.toDouble()), Size(0.5, 0.5))
             }
         }
     }
