@@ -299,7 +299,7 @@ class BookGenerationService(
     }
 
     fun updateSlotOffset(pageId: UUID, slotIndex: Int, offsetX: Double, offsetY: Double, userId: UUID) {
-        val page = pageRepository.findById(pageId)
+        val page = pageRepository.findByIdForUpdate(pageId)
             .orElseThrow { PageNotFoundException(pageId) }
         if (page.book?.trip?.user?.id != userId) {
             throw PageNotFoundException(pageId)
@@ -316,7 +316,7 @@ class BookGenerationService(
     }
 
     fun updateSlotPhoto(pageId: UUID, slotIndex: Int, photoId: UUID, userId: UUID) {
-        val page = pageRepository.findById(pageId)
+        val page = pageRepository.findByIdForUpdate(pageId)
             .orElseThrow { PageNotFoundException(pageId) }
         val trip = page.book?.trip
         if (trip?.user?.id != userId) {
@@ -410,9 +410,12 @@ class BookGenerationService(
      */
     @Transactional
     fun swapSlots(pageAId: UUID, slotA: Int, pageBId: UUID, slotB: Int, userId: UUID) {
-        val pageA = pageRepository.findById(pageAId).orElseThrow { PageNotFoundException(pageAId) }
-        val pageB = if (pageBId == pageAId) pageA
-        else pageRepository.findById(pageBId).orElseThrow { PageNotFoundException(pageBId) }
+        // Row-lock the affected page(s) up front, in deterministic id order, so overlapping
+        // fire-and-forget swaps can't lost-update each other. Same page id => a single lock.
+        val locked = (if (pageAId == pageBId) listOf(pageAId) else listOf(pageAId, pageBId).sorted())
+            .associateWith { id -> pageRepository.findByIdForUpdate(id).orElseThrow { PageNotFoundException(id) } }
+        val pageA = locked.getValue(pageAId)
+        val pageB = locked.getValue(pageBId)
 
         // Both slots must live in the same book, owned by the caller. Anything else reads as not-found.
         val bookA = pageA.book ?: throw PageNotFoundException(pageAId)

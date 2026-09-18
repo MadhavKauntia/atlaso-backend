@@ -65,7 +65,7 @@ class BookGenerationServiceSwapTest {
 
     private fun page(id: UUID, book: Book, slots: List<PhotoSlot>): Page {
         val page = Page(id = id, book = book, pageNumber = 2, layout = Layout.TWO_VERTICAL, slots = slots)
-        whenever(pageRepository.findById(id)).thenReturn(Optional.of(page))
+        whenever(pageRepository.findByIdForUpdate(id)).thenReturn(Optional.of(page))
         return page
     }
 
