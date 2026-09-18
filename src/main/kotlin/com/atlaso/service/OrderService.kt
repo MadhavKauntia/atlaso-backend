@@ -1,11 +1,13 @@
 package com.atlaso.service
 
+import com.atlaso.controller.ValidatedShipping
 import com.atlaso.domain.order.Checkout
 import com.atlaso.domain.order.Order
 import com.atlaso.domain.trip.TripStatus
 import com.atlaso.domain.user.FREE_PREVIEW_QUOTA
 import com.atlaso.repository.CheckoutRepository
 import com.atlaso.repository.OrderRepository
+import com.atlaso.repository.TripRepository
 import com.atlaso.repository.UserRepository
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
@@ -24,6 +26,7 @@ class OrderService(
     private val orderRepository: OrderRepository,
     private val checkoutRepository: CheckoutRepository,
     private val userRepository: UserRepository,
+    private val tripRepository: TripRepository,
     private val tripService: TripService,
     private val bookGenerationService: BookGenerationService,
     private val paymentService: PaymentService,
@@ -69,6 +72,28 @@ class OrderService(
 
         val tripId = checkout.tripId
         val userId = checkout.userId
+
+        // Serialize all order finalization on the trip row (the free path takes the same lock), then
+        // enforce one order per trip across every path.
+        tripRepository.findByIdForUpdate(tripId)
+        // Re-check under the lock: a concurrent /verify or webhook for THIS payment may have committed
+        // between the early guard above and acquiring the lock.
+        orderRepository.findByRazorpayPaymentId(razorpayPaymentId)?.let { return it }
+        // A different order already finalized this trip (a free order, or another payment). Don't
+        // create a second one. The payment WAS captured, so record it durably: mark the checkout
+        // CONFLICT and store the captured payment id (queryable for refund/reconciliation), and
+        // signal the caller via checkout.status so it never reports this as a successful order.
+        orderRepository.findFirstByTripIdOrderByCreatedAtDesc(tripId)?.let { existing ->
+            checkout.status = "CONFLICT"
+            checkout.razorpayPaymentId = razorpayPaymentId
+            checkoutRepository.save(checkout)
+            logger.error(
+                "Captured payment {} conflicts with existing order ATL-{} on trip {}; checkout {} flagged CONFLICT for refund",
+                razorpayPaymentId, existing.number, tripId, checkout.id
+            )
+            return existing
+        }
+
         val trip = tripService.getTrip(tripId, userId) // ownership re-check
         val user = userRepository.findById(userId).orElse(null)
 
@@ -127,6 +152,94 @@ class OrderService(
 
         return saved
     }
+
+    /**
+     * Records a free order for a full-discount ("100% off") coupon, with no payment. Mirrors
+     * [recordPaidOrder]'s side effects — trip → ORDERED, ₹0 receipt + confirmation email, Slack
+     * #orders ping, free-preview reset, coupon-usage bump — minus the Razorpay verification.
+     *
+     * Called straight from create-order (no Checkout, no /verify, no webhook). The coupon is
+     * re-resolved and asserted full-discount here so the client can never self-grant a free order.
+     * Idempotent on the trip: a trip is ordered once, so a double-submit returns the existing order.
+     */
+    @Transactional
+    fun recordFreeOrder(
+        tripId: UUID,
+        userId: UUID,
+        quantity: Int,
+        couponCode: String,
+        shipping: ValidatedShipping,
+    ): Order {
+        // Serialize free-order creation on the trip row so two concurrent double-submits can't both
+        // read "no order" and each insert a separate ₹0 order (orders has no per-trip unique key).
+        tripRepository.findByIdForUpdate(tripId)
+
+        // A trip is only ever ordered once — return the existing order on a retry/double-submit.
+        orderRepository.findFirstByTripIdOrderByCreatedAtDesc(tripId)
+            ?.takeIf { it.trip.user?.id == userId }
+            ?.let { return it }
+
+        val trip = tripService.getTrip(tripId, userId) // ownership re-check
+        val user = userRepository.findById(userId).orElse(null)
+        val qty = quantity
+        val listMinor = qty * UNIT_PRICE_MINOR
+
+        // Authoritative re-validation: only a genuine, eligible full-discount coupon reaches here.
+        val coupon = couponService.resolveForOrder(couponCode, listMinor)
+        if (!coupon.fullDiscount) throw CouponInvalidException("Coupon does not grant a free order")
+
+        // Reserve the redemption atomically INSIDE this transaction, before creating the order. The
+        // conditional UPDATE enforces maxUses under concurrency (unlike the best-effort counter on the
+        // paid path); if we're at the cap it reserves nothing and we abort — rolling back the order.
+        if (!couponService.tryReserveRedemption(coupon)) {
+            throw CouponInvalidException("This coupon has been fully redeemed")
+        }
+
+        val book = runCatching { bookGenerationService.getLatestBookByTripId(tripId, userId) }.getOrNull()
+
+        val order = Order(
+            number = orderRepository.nextNumber(),
+            trip = trip,
+            bookId = book?.id,
+            bookTitle = book?.title,
+            razorpayOrderId = null,
+            razorpayPaymentId = null,
+            paymentMethod = null,
+            amountMinor = 0,
+            currency = "INR",
+            quantity = qty,
+            customerName = user?.name,
+            customerEmail = user?.email,
+            addressLine1 = shipping.addressLine1,
+            addressLine2 = shipping.addressLine2,
+            city = shipping.city,
+            state = shipping.state,
+            pincode = shipping.pincode,
+            shipCountry = shipping.country,
+            phone = shipping.phone,
+            couponCode = coupon.code,
+            razorpayOfferId = null,
+            discountMinor = listMinor, // the full list price was waived
+            status = "PAID",
+        )
+        val saved = orderRepository.save(order)
+
+        tripService.updateStatus(tripId, TripStatus.ORDERED)
+        userRepository.resetFreePreviews(userId, FREE_PREVIEW_QUOTA)
+        logger.info("Recorded FREE order ATL-{} for trip {} (coupon {})", saved.number, tripId, coupon.code)
+
+        // Redemption was already reserved atomically above (no best-effort bump here).
+        afterCommit { orderNotificationService.sendOrderConfirmation(saved) }
+        afterCommit { slackNotifier.notifyOrder(saved) }
+
+        return saved
+    }
+
+    /** Whether [tripId] already has a finalized order — used by create-order to refuse starting a
+     *  second checkout once a trip is ordered. */
+    @Transactional(readOnly = true)
+    fun hasOrderForTrip(tripId: UUID): Boolean =
+        orderRepository.findFirstByTripIdOrderByCreatedAtDesc(tripId) != null
 
     /** The recorded order for a Razorpay payment id, if one exists. Used by the /verify and
      *  webhook callers to distinguish "the other path already inserted this payment" from an

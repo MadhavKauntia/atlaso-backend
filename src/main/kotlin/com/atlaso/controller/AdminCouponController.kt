@@ -30,9 +30,16 @@ class AdminCouponController(
 
     @PostMapping
     fun create(@RequestBody req: CreateCouponRequest): ResponseEntity<AdminCouponDto> {
+        val offerId = req.razorpayOfferId?.trim()?.ifBlank { null }
+        // A normal coupon applies its discount via a Razorpay offer; a full-discount coupon skips
+        // Razorpay entirely and needs none.
+        require(req.fullDiscount || offerId != null) {
+            "razorpayOfferId is required unless fullDiscount is true"
+        }
         val coupon = Coupon(
             code = req.code.trim().uppercase(),
-            razorpayOfferId = req.razorpayOfferId.trim(),
+            razorpayOfferId = offerId,
+            fullDiscount = req.fullDiscount,
             description = req.description,
             discountType = req.discountType?.uppercase(),
             discountValue = req.discountValue,
@@ -57,6 +64,7 @@ class AdminCouponController(
         id = id.toString(),
         code = code,
         razorpayOfferId = razorpayOfferId,
+        fullDiscount = fullDiscount,
         description = description,
         discountType = discountType,
         discountValue = discountValue,

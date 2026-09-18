@@ -1,11 +1,15 @@
 package com.atlaso.service
 
+import com.atlaso.controller.ValidatedShipping
+import com.atlaso.domain.coupon.Coupon
 import com.atlaso.domain.order.Checkout
 import com.atlaso.domain.order.Order
 import com.atlaso.domain.trip.Trip
 import com.atlaso.domain.trip.TripStatus
+import com.atlaso.domain.user.User
 import com.atlaso.repository.CheckoutRepository
 import com.atlaso.repository.OrderRepository
+import com.atlaso.repository.TripRepository
 import com.atlaso.repository.UserRepository
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
@@ -23,6 +27,7 @@ class OrderServiceTest {
     private val orderRepo = mock<OrderRepository>()
     private val checkoutRepo = mock<CheckoutRepository>()
     private val userRepo = mock<UserRepository>()
+    private val tripRepo = mock<TripRepository>()
     private val tripService = mock<TripService>()
     private val bookGen = mock<BookGenerationService>()
     private val payment = mock<PaymentService>()
@@ -30,7 +35,7 @@ class OrderServiceTest {
     private val receipt = mock<ReceiptRenderer>()
     private val notifications = mock<OrderNotificationService>()
     private val slackNotifier = mock<SlackNotifier>()
-    private val svc = OrderService(orderRepo, checkoutRepo, userRepo, tripService, bookGen, payment, coupon, receipt, notifications, slackNotifier)
+    private val svc = OrderService(orderRepo, checkoutRepo, userRepo, tripRepo, tripService, bookGen, payment, coupon, receipt, notifications, slackNotifier)
 
     private val tripId = UUID.randomUUID()
     private val userId = UUID.randomUUID()
@@ -118,5 +123,96 @@ class OrderServiceTest {
         assertEquals("Bengaluru", order.city)
         assertEquals("560001", order.pincode)
         assertEquals("+919876543210", order.phone)
+    }
+
+    @Test
+    fun `recordPaidOrder flags a conflicting capture instead of creating a second order`() {
+        whenever(payment.fetchPayment(any())).thenReturn(pay())
+        val existing = Order(number = 1L, trip = Trip(id = tripId, name = "T", status = TripStatus.ORDERED), amountMinor = 0L)
+        whenever(orderRepo.findFirstByTripIdOrderByCreatedAtDesc(tripId)).thenReturn(existing)
+        val c = checkout()
+
+        val result = svc.recordPaidOrder(c, "pay_NEW")
+
+        assertSame(existing, result)
+        verify(tripRepo).findByIdForUpdate(tripId)   // serialized on the trip
+        verify(orderRepo, never()).save(any())       // no duplicate order for the trip
+        verify(tripService, never()).updateStatus(any(), any())
+        // The captured payment is durably recorded for refund/reconciliation.
+        assertEquals("CONFLICT", c.status)
+        assertEquals("pay_NEW", c.razorpayPaymentId)
+        verify(checkoutRepo).save(c)
+    }
+
+    // --- Free orders (full-discount coupon, no payment) ---
+
+    private fun shipping() = ValidatedShipping(
+        addressLine1 = "12 MG Road", addressLine2 = null, city = "Bengaluru",
+        state = "Karnataka", pincode = "560001", country = "India", phone = "+919876543210",
+    )
+
+    private fun fullDiscountCoupon() = Coupon(code = "FREEBOOK", razorpayOfferId = null, fullDiscount = true)
+
+    @Test
+    fun `recordFreeOrder records a zero order, marks the trip ORDERED, and skips payment`() {
+        whenever(orderRepo.findFirstByTripIdOrderByCreatedAtDesc(tripId)).thenReturn(null)
+        whenever(tripService.getTrip(tripId, userId)).thenReturn(Trip(id = tripId, name = "T", status = TripStatus.BOOK_GENERATED))
+        whenever(userRepo.findById(userId)).thenReturn(Optional.empty())
+        whenever(coupon.resolveForOrder(any(), any())).thenReturn(fullDiscountCoupon())
+        whenever(coupon.tryReserveRedemption(any())).thenReturn(true)
+        whenever(bookGen.getLatestBookByTripId(tripId, userId)).thenThrow(RuntimeException("no book"))
+        whenever(orderRepo.nextNumber()).thenReturn(9L)
+        whenever(orderRepo.save(any<Order>())).thenAnswer { it.arguments[0] }
+
+        val order = svc.recordFreeOrder(tripId, userId, 1, "FREEBOOK", shipping())
+
+        assertEquals(0L, order.amountMinor)
+        assertEquals(expected, order.discountMinor) // full list price waived
+        assertEquals("FREEBOOK", order.couponCode)
+        assertNull(order.razorpayPaymentId)
+        verify(payment, never()).fetchPayment(any()) // no Razorpay round-trip
+        verify(tripRepo).findByIdForUpdate(tripId) // trip row locked before the existence check
+        verify(coupon).tryReserveRedemption(any()) // redemption reserved atomically, not best-effort
+        verify(tripService).updateStatus(tripId, TripStatus.ORDERED)
+        verify(userRepo).resetFreePreviews(any(), any())
+        verify(notifications).sendOrderConfirmation(any())
+        verify(slackNotifier).notifyOrder(any())
+    }
+
+    @Test
+    fun `recordFreeOrder aborts when the coupon is at its usage cap`() {
+        whenever(orderRepo.findFirstByTripIdOrderByCreatedAtDesc(tripId)).thenReturn(null)
+        whenever(tripService.getTrip(tripId, userId)).thenReturn(Trip(id = tripId, name = "T", status = TripStatus.BOOK_GENERATED))
+        whenever(userRepo.findById(userId)).thenReturn(Optional.empty())
+        whenever(coupon.resolveForOrder(any(), any())).thenReturn(fullDiscountCoupon())
+        whenever(coupon.tryReserveRedemption(any())).thenReturn(false) // at cap
+
+        assertThrows(CouponInvalidException::class.java) { svc.recordFreeOrder(tripId, userId, 1, "FREEBOOK", shipping()) }
+        verify(orderRepo, never()).save(any()) // no order created when the reservation fails
+    }
+
+    @Test
+    fun `recordFreeOrder is idempotent — an already-ordered trip returns its existing order`() {
+        val user = User(id = userId, googleSub = "g", email = "a@b.com", name = "A")
+        val trip = Trip(id = tripId, name = "T", status = TripStatus.ORDERED).copy(user = user)
+        val existing = Order(number = 1L, trip = trip, amountMinor = 0L)
+        whenever(orderRepo.findFirstByTripIdOrderByCreatedAtDesc(tripId)).thenReturn(existing)
+
+        val result = svc.recordFreeOrder(tripId, userId, 1, "FREEBOOK", shipping())
+
+        assertSame(existing, result)
+        verify(orderRepo, never()).save(any())
+        verify(tripService, never()).updateStatus(any(), any())
+    }
+
+    @Test
+    fun `recordFreeOrder rejects a coupon that is not full-discount`() {
+        whenever(orderRepo.findFirstByTripIdOrderByCreatedAtDesc(tripId)).thenReturn(null)
+        whenever(tripService.getTrip(tripId, userId)).thenReturn(Trip(id = tripId, name = "T", status = TripStatus.BOOK_GENERATED))
+        whenever(userRepo.findById(userId)).thenReturn(Optional.empty())
+        whenever(coupon.resolveForOrder(any(), any())).thenReturn(Coupon(code = "SAVE20", razorpayOfferId = "offer_X", discountType = "PERCENT", discountValue = 20))
+
+        assertThrows(CouponInvalidException::class.java) { svc.recordFreeOrder(tripId, userId, 1, "SAVE20", shipping()) }
+        verify(orderRepo, never()).save(any())
     }
 }

@@ -27,6 +27,7 @@ class CouponController(
                 code = result.code,
                 discountMinor = result.discountMinor,
                 finalMinor = result.finalMinor,
+                free = result.free,
                 message = result.message,
             )
         )

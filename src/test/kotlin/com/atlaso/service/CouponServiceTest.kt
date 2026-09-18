@@ -29,9 +29,11 @@ class CouponServiceTest {
         validUntil: Instant? = null,
         maxUses: Int? = null,
         usedCount: Int = 0,
+        fullDiscount: Boolean = false,
     ) = Coupon(
         code = code,
-        razorpayOfferId = "offer_TEST",
+        razorpayOfferId = if (fullDiscount) null else "offer_TEST",
+        fullDiscount = fullDiscount,
         discountType = type,
         discountValue = value,
         maxDiscountMinor = maxDiscount,
@@ -106,6 +108,16 @@ class CouponServiceTest {
     fun `below minimum amount is invalid`() {
         onFindReturn(coupon(minAmount = 500000))
         assertFalse(service.validate("SAVE20", amount).valid)
+    }
+
+    @Test
+    fun `full-discount coupon is free — 100% off, skips payment`() {
+        onFindReturn(coupon(code = "FREEBOOK", type = null, value = null, fullDiscount = true))
+        val result = service.validate("freebook", amount)
+        assertTrue(result.valid)
+        assertTrue(result.free)
+        assertEquals(amount, result.discountMinor) // whole order waived
+        assertEquals(0L, result.finalMinor)
     }
 
     @Test

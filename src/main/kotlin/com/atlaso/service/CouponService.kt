@@ -14,6 +14,7 @@ data class CouponValidation(
     val forceOffer: Boolean,
     val discountMinor: Long,    // previewed saving in paise (0 when invalid)
     val finalMinor: Long,       // amountMinor - discountMinor (preview only)
+    val free: Boolean,          // full-discount coupon — 100% off, skips the Razorpay flow
     val message: String?,       // reason when invalid
 )
 
@@ -33,14 +34,15 @@ class CouponService(
     fun validate(code: String, amountMinor: Long): CouponValidation {
         val trimmed = code.trim()
         val invalid = { reason: String ->
-            CouponValidation(false, trimmed.uppercase(), null, false, 0, amountMinor, reason)
+            CouponValidation(false, trimmed.uppercase(), null, false, 0, amountMinor, false, reason)
         }
         if (trimmed.isBlank()) return invalid("Enter a coupon code")
 
         val coupon = couponRepository.findByCode(trimmed) ?: return invalid("Invalid coupon code")
         checkEligibility(coupon, amountMinor)?.let { return invalid(it) }
 
-        val discount = previewDiscount(coupon, amountMinor)
+        // A full-discount coupon is 100% off and skips payment; otherwise preview the offer's saving.
+        val discount = if (coupon.fullDiscount) amountMinor else previewDiscount(coupon, amountMinor)
         return CouponValidation(
             valid = true,
             code = coupon.code.uppercase(),
@@ -48,6 +50,7 @@ class CouponService(
             forceOffer = coupon.forceOffer,
             discountMinor = discount,
             finalMinor = (amountMinor - discount).coerceAtLeast(0),
+            free = coupon.fullDiscount,
             message = null,
         )
     }
@@ -87,6 +90,14 @@ class CouponService(
     fun recordRedemption(coupon: Coupon) {
         coupon.id?.let { couponRepository.incrementUsage(it) }
     }
+
+    /**
+     * Atomically reserves one redemption if the coupon is still under its cap. Returns true when
+     * reserved. Unlike [recordRedemption] this is the authoritative cap enforcement — call it inside
+     * the order transaction so the reservation rolls back if the order does (free-order path).
+     */
+    fun tryReserveRedemption(coupon: Coupon): Boolean =
+        coupon.id?.let { couponRepository.tryReserveRedemption(it) > 0 } ?: false
 
     /** Returns null when eligible, otherwise a human-readable reason. */
     private fun checkEligibility(coupon: Coupon, amountMinor: Long): String? {

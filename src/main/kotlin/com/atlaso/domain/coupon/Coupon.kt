@@ -22,8 +22,14 @@ data class Coupon(
     @Column(nullable = false, length = 64)
     val code: String,
 
-    @Column(name = "razorpay_offer_id", nullable = false, length = 64)
-    val razorpayOfferId: String,
+    /** The linked Razorpay offer that applies the discount at payment time. Null for full-discount
+     *  coupons, which skip Razorpay entirely (see [fullDiscount]). */
+    @Column(name = "razorpay_offer_id", length = 64)
+    val razorpayOfferId: String? = null,
+
+    /** 100%-off coupon that bypasses payment: create-order records the order directly, no Razorpay. */
+    @Column(name = "full_discount", nullable = false)
+    val fullDiscount: Boolean = false,
 
     @Column(length = 255)
     val description: String? = null,
