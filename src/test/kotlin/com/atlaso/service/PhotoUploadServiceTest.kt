@@ -3,6 +3,7 @@ package com.atlaso.service
 import com.atlaso.controller.dto.ConfirmUploadRequest
 import com.atlaso.controller.dto.InitiateUploadRequest
 import com.atlaso.domain.photo.Photo
+import com.atlaso.domain.photo.PhotoMetadata
 import com.atlaso.domain.photo.UploadGrant
 import com.atlaso.domain.trip.Trip
 import com.atlaso.domain.trip.TripStatus
@@ -221,5 +222,25 @@ class PhotoUploadServiceTest {
         whenever(grantRepo.sumReservedBytes(any(), any())).thenReturn(PhotoUploadService.MAX_BYTES_PER_TRIP) // already at the cap
         val req = InitiateUploadRequest(filename = "p.jpg", contentType = "image/jpeg", fileSize = 1000)
         assertThrows(IllegalArgumentException::class.java) { svc.initiateUploads(tripId, listOf(req)) }
+    }
+
+    @Test
+    fun `getPhotosForTrip returns photos chronologically (capture time, then upload time)`() {
+        val trip = Trip(id = tripId, name = "T", status = TripStatus.BOOK_GENERATED)
+        val base = Instant.parse("2025-10-12T09:00:00Z")
+        fun photo(taken: Instant?, uploaded: Instant) = Photo(
+            id = UUID.randomUUID(), trip = trip, storageKey = "k/${UUID.randomUUID()}",
+            originalFilename = "x.jpg", contentType = "image/jpeg", fileSize = 100,
+            metadata = PhotoMetadata(width = 10, height = 10, takenAt = taken), uploadedAt = uploaded,
+        )
+        val third = photo(base.plusSeconds(300), base)
+        val first = photo(base.plusSeconds(100), base)
+        val second = photo(base.plusSeconds(200), base)
+        val noExif = photo(null, base.plusSeconds(50)) // no takenAt -> sorts by uploadedAt (earliest here)
+        whenever(photoRepo.findByTripId(tripId)).thenReturn(listOf(third, first, second, noExif))
+
+        val result = svc.getPhotosForTrip(tripId, userId = UUID.randomUUID())
+
+        assertEquals(listOf(noExif.id, first.id, second.id, third.id), result.map { it.id })
     }
 }

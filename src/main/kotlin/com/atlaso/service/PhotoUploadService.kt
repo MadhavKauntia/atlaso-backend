@@ -69,7 +69,11 @@ class PhotoUploadService(
     @Transactional(readOnly = true)
     fun getPhotosForTrip(tripId: UUID, userId: UUID? = null, guestToken: String? = null): List<Photo> {
         tripService.assertTripAccess(tripId, userId, guestToken)
+        // Chronological (capture time, falling back to upload time) so the Replace picker mirrors the
+        // trip timeline instead of arbitrary DB order. takenAt lives in the metadata jsonb, so we sort
+        // in-memory rather than via ORDER BY; photo counts per trip are small.
         return photoRepository.findByTripId(tripId)
+            .sortedBy { it.metadata.takenAt ?: it.uploadedAt }
     }
 
     @Transactional(readOnly = true)
