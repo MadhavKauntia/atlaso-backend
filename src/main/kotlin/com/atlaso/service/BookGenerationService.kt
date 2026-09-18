@@ -354,7 +354,9 @@ class BookGenerationService(
         // A double-page spread occupies two facing pages; it can't be applied to a single page.
         require(newLayout != Layout.DOUBLE_PAGE_FULL_BLEED) { "Layout $newLayout can't be applied to a single page" }
 
-        val page = pageRepository.findById(pageId)
+        // Lock the page like the other slot mutations, so a concurrent swap/offset/photo edit
+        // can't be read stale here and then overwritten by this layout change.
+        val page = pageRepository.findByIdForUpdate(pageId)
             .orElseThrow { PageNotFoundException(pageId) }
         val book = page.book
         val trip = book?.trip
