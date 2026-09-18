@@ -24,9 +24,10 @@ data class CreateOrderRequest(
 )
 
 data class CreateOrderResponse(
-    val orderId: String,
+    val orderId: String? = null,   // null when the order was placed free (no Razorpay)
     val amount: Long,
     val currency: String,
+    val free: Boolean = false,     // true => order already recorded, skip Razorpay checkout
 )
 
 data class VerifyPaymentRequest(

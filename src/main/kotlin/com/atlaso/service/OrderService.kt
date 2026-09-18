@@ -1,5 +1,6 @@
 package com.atlaso.service
 
+import com.atlaso.controller.ValidatedShipping
 import com.atlaso.domain.order.Checkout
 import com.atlaso.domain.order.Order
 import com.atlaso.domain.trip.TripStatus
@@ -123,6 +124,77 @@ class OrderService(
         // ends up rolling back.
         afterCommit { orderNotificationService.sendOrderConfirmation(saved) }
         // Ping #orders once the order is durably committed.
+        afterCommit { slackNotifier.notifyOrder(saved) }
+
+        return saved
+    }
+
+    /**
+     * Records a free order for a full-discount ("100% off") coupon, with no payment. Mirrors
+     * [recordPaidOrder]'s side effects — trip → ORDERED, ₹0 receipt + confirmation email, Slack
+     * #orders ping, free-preview reset, coupon-usage bump — minus the Razorpay verification.
+     *
+     * Called straight from create-order (no Checkout, no /verify, no webhook). The coupon is
+     * re-resolved and asserted full-discount here so the client can never self-grant a free order.
+     * Idempotent on the trip: a trip is ordered once, so a double-submit returns the existing order.
+     */
+    @Transactional
+    fun recordFreeOrder(
+        tripId: UUID,
+        userId: UUID,
+        quantity: Int,
+        couponCode: String,
+        shipping: ValidatedShipping,
+    ): Order {
+        // A trip is only ever ordered once — return the existing order on a retry/double-submit.
+        orderRepository.findFirstByTripIdOrderByCreatedAtDesc(tripId)
+            ?.takeIf { it.trip.user?.id == userId }
+            ?.let { return it }
+
+        val trip = tripService.getTrip(tripId, userId) // ownership re-check
+        val user = userRepository.findById(userId).orElse(null)
+        val qty = quantity
+        val listMinor = qty * UNIT_PRICE_MINOR
+
+        // Authoritative re-validation: only a genuine, eligible full-discount coupon reaches here.
+        val coupon = couponService.resolveForOrder(couponCode, listMinor)
+        if (!coupon.fullDiscount) throw CouponInvalidException("Coupon does not grant a free order")
+
+        val book = runCatching { bookGenerationService.getLatestBookByTripId(tripId, userId) }.getOrNull()
+
+        val order = Order(
+            number = orderRepository.nextNumber(),
+            trip = trip,
+            bookId = book?.id,
+            bookTitle = book?.title,
+            razorpayOrderId = null,
+            razorpayPaymentId = null,
+            paymentMethod = null,
+            amountMinor = 0,
+            currency = "INR",
+            quantity = qty,
+            customerName = user?.name,
+            customerEmail = user?.email,
+            addressLine1 = shipping.addressLine1,
+            addressLine2 = shipping.addressLine2,
+            city = shipping.city,
+            state = shipping.state,
+            pincode = shipping.pincode,
+            shipCountry = shipping.country,
+            phone = shipping.phone,
+            couponCode = coupon.code,
+            razorpayOfferId = null,
+            discountMinor = listMinor, // the full list price was waived
+            status = "PAID",
+        )
+        val saved = orderRepository.save(order)
+
+        tripService.updateStatus(tripId, TripStatus.ORDERED)
+        userRepository.resetFreePreviews(userId, FREE_PREVIEW_QUOTA)
+        logger.info("Recorded FREE order ATL-{} for trip {} (coupon {})", saved.number, tripId, coupon.code)
+
+        runCatching { couponService.recordRedemption(coupon) }
+        afterCommit { orderNotificationService.sendOrderConfirmation(saved) }
         afterCommit { slackNotifier.notifyOrder(saved) }
 
         return saved

@@ -5,6 +5,7 @@ import com.atlaso.controller.dto.CreateOrderResponse
 import com.atlaso.controller.dto.VerifyPaymentRequest
 import com.atlaso.domain.order.Checkout
 import com.atlaso.repository.CheckoutRepository
+import com.atlaso.service.CouponInvalidException
 import com.atlaso.service.CouponService
 import com.atlaso.service.OrderService
 import com.atlaso.service.PaymentVerificationException
@@ -67,6 +68,19 @@ class PaymentController(
             if (validation != null && !validation.valid) {
                 return ResponseEntity.badRequest().body(mapOf("error" to (validation.message ?: "Coupon is not valid")))
             }
+
+            // Full-discount coupon: no payment. Record the order directly and skip Razorpay entirely.
+            if (validation != null && validation.free) {
+                orderService.recordFreeOrder(
+                    tripId = request.tripId,
+                    userId = userId,
+                    quantity = quantity,
+                    couponCode = request.couponCode.orEmpty().trim(),
+                    shipping = shipping,
+                )
+                return ResponseEntity.ok(CreateOrderResponse(orderId = null, amount = 0, currency = "INR", free = true))
+            }
+
             val expectedCaptured = validation?.finalMinor ?: listMinor
 
             val order = paymentService.createOrder(
@@ -96,6 +110,8 @@ class PaymentController(
                 )
             )
             ResponseEntity.ok(CreateOrderResponse(order.orderId, order.amount, order.currency))
+        } catch (ex: CouponInvalidException) {
+            ResponseEntity.badRequest().body(mapOf("error" to (ex.message ?: "Coupon is not valid")))
         } catch (ex: RazorpayAuthException) {
             ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(mapOf("error" to "Razorpay authentication failed"))
         } catch (ex: RazorpayException) {

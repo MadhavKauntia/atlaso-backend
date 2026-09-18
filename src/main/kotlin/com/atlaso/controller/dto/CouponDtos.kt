@@ -5,19 +5,23 @@ data class ValidateCouponRequest(
     val quantity: Int? = 1,
 )
 
-/** Public preview — deliberately omits the Razorpay offer id. */
+/** Public preview — deliberately omits the Razorpay offer id. [free] = 100% off, skips payment. */
 data class ValidateCouponResponse(
     val valid: Boolean,
     val code: String,
     val discountMinor: Long,
     val finalMinor: Long,
+    val free: Boolean = false,
     val message: String? = null,
 )
 
-/** Admin: create/upsert a coupon that maps a code to a Razorpay offer. */
+/** Admin: create/upsert a coupon. Maps a code to a Razorpay offer, or a full-discount (free) coupon. */
 data class CreateCouponRequest(
     val code: String,
-    val razorpayOfferId: String,
+    /** Required unless [fullDiscount] is true (a full-discount coupon has no Razorpay offer). */
+    val razorpayOfferId: String? = null,
+    /** 100%-off coupon that skips the Razorpay flow entirely. */
+    val fullDiscount: Boolean = false,
     val description: String? = null,
     val discountType: String? = null,   // PERCENT | FLAT
     val discountValue: Long? = null,
@@ -33,7 +37,8 @@ data class CreateCouponRequest(
 data class AdminCouponDto(
     val id: String,
     val code: String,
-    val razorpayOfferId: String,
+    val razorpayOfferId: String?,
+    val fullDiscount: Boolean,
     val description: String?,
     val discountType: String?,
     val discountValue: Long?,
