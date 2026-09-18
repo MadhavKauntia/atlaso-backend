@@ -7,6 +7,7 @@ import com.atlaso.domain.trip.TripStatus
 import com.atlaso.domain.user.FREE_PREVIEW_QUOTA
 import com.atlaso.repository.CheckoutRepository
 import com.atlaso.repository.OrderRepository
+import com.atlaso.repository.TripRepository
 import com.atlaso.repository.UserRepository
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
@@ -25,6 +26,7 @@ class OrderService(
     private val orderRepository: OrderRepository,
     private val checkoutRepository: CheckoutRepository,
     private val userRepository: UserRepository,
+    private val tripRepository: TripRepository,
     private val tripService: TripService,
     private val bookGenerationService: BookGenerationService,
     private val paymentService: PaymentService,
@@ -146,6 +148,10 @@ class OrderService(
         couponCode: String,
         shipping: ValidatedShipping,
     ): Order {
+        // Serialize free-order creation on the trip row so two concurrent double-submits can't both
+        // read "no order" and each insert a separate ₹0 order (orders has no per-trip unique key).
+        tripRepository.findByIdForUpdate(tripId)
+
         // A trip is only ever ordered once — return the existing order on a retry/double-submit.
         orderRepository.findFirstByTripIdOrderByCreatedAtDesc(tripId)
             ?.takeIf { it.trip.user?.id == userId }
@@ -159,6 +165,13 @@ class OrderService(
         // Authoritative re-validation: only a genuine, eligible full-discount coupon reaches here.
         val coupon = couponService.resolveForOrder(couponCode, listMinor)
         if (!coupon.fullDiscount) throw CouponInvalidException("Coupon does not grant a free order")
+
+        // Reserve the redemption atomically INSIDE this transaction, before creating the order. The
+        // conditional UPDATE enforces maxUses under concurrency (unlike the best-effort counter on the
+        // paid path); if we're at the cap it reserves nothing and we abort — rolling back the order.
+        if (!couponService.tryReserveRedemption(coupon)) {
+            throw CouponInvalidException("This coupon has been fully redeemed")
+        }
 
         val book = runCatching { bookGenerationService.getLatestBookByTripId(tripId, userId) }.getOrNull()
 
@@ -193,7 +206,7 @@ class OrderService(
         userRepository.resetFreePreviews(userId, FREE_PREVIEW_QUOTA)
         logger.info("Recorded FREE order ATL-{} for trip {} (coupon {})", saved.number, tripId, coupon.code)
 
-        runCatching { couponService.recordRedemption(coupon) }
+        // Redemption was already reserved atomically above (no best-effort bump here).
         afterCommit { orderNotificationService.sendOrderConfirmation(saved) }
         afterCommit { slackNotifier.notifyOrder(saved) }
 

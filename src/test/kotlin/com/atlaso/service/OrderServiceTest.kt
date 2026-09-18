@@ -9,6 +9,7 @@ import com.atlaso.domain.trip.TripStatus
 import com.atlaso.domain.user.User
 import com.atlaso.repository.CheckoutRepository
 import com.atlaso.repository.OrderRepository
+import com.atlaso.repository.TripRepository
 import com.atlaso.repository.UserRepository
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
@@ -26,6 +27,7 @@ class OrderServiceTest {
     private val orderRepo = mock<OrderRepository>()
     private val checkoutRepo = mock<CheckoutRepository>()
     private val userRepo = mock<UserRepository>()
+    private val tripRepo = mock<TripRepository>()
     private val tripService = mock<TripService>()
     private val bookGen = mock<BookGenerationService>()
     private val payment = mock<PaymentService>()
@@ -33,7 +35,7 @@ class OrderServiceTest {
     private val receipt = mock<ReceiptRenderer>()
     private val notifications = mock<OrderNotificationService>()
     private val slackNotifier = mock<SlackNotifier>()
-    private val svc = OrderService(orderRepo, checkoutRepo, userRepo, tripService, bookGen, payment, coupon, receipt, notifications, slackNotifier)
+    private val svc = OrderService(orderRepo, checkoutRepo, userRepo, tripRepo, tripService, bookGen, payment, coupon, receipt, notifications, slackNotifier)
 
     private val tripId = UUID.randomUUID()
     private val userId = UUID.randomUUID()
@@ -138,6 +140,7 @@ class OrderServiceTest {
         whenever(tripService.getTrip(tripId, userId)).thenReturn(Trip(id = tripId, name = "T", status = TripStatus.BOOK_GENERATED))
         whenever(userRepo.findById(userId)).thenReturn(Optional.empty())
         whenever(coupon.resolveForOrder(any(), any())).thenReturn(fullDiscountCoupon())
+        whenever(coupon.tryReserveRedemption(any())).thenReturn(true)
         whenever(bookGen.getLatestBookByTripId(tripId, userId)).thenThrow(RuntimeException("no book"))
         whenever(orderRepo.nextNumber()).thenReturn(9L)
         whenever(orderRepo.save(any<Order>())).thenAnswer { it.arguments[0] }
@@ -149,11 +152,24 @@ class OrderServiceTest {
         assertEquals("FREEBOOK", order.couponCode)
         assertNull(order.razorpayPaymentId)
         verify(payment, never()).fetchPayment(any()) // no Razorpay round-trip
+        verify(tripRepo).findByIdForUpdate(tripId) // trip row locked before the existence check
+        verify(coupon).tryReserveRedemption(any()) // redemption reserved atomically, not best-effort
         verify(tripService).updateStatus(tripId, TripStatus.ORDERED)
         verify(userRepo).resetFreePreviews(any(), any())
-        verify(coupon).recordRedemption(any())
         verify(notifications).sendOrderConfirmation(any())
         verify(slackNotifier).notifyOrder(any())
+    }
+
+    @Test
+    fun `recordFreeOrder aborts when the coupon is at its usage cap`() {
+        whenever(orderRepo.findFirstByTripIdOrderByCreatedAtDesc(tripId)).thenReturn(null)
+        whenever(tripService.getTrip(tripId, userId)).thenReturn(Trip(id = tripId, name = "T", status = TripStatus.BOOK_GENERATED))
+        whenever(userRepo.findById(userId)).thenReturn(Optional.empty())
+        whenever(coupon.resolveForOrder(any(), any())).thenReturn(fullDiscountCoupon())
+        whenever(coupon.tryReserveRedemption(any())).thenReturn(false) // at cap
+
+        assertThrows(CouponInvalidException::class.java) { svc.recordFreeOrder(tripId, userId, 1, "FREEBOOK", shipping()) }
+        verify(orderRepo, never()).save(any()) // no order created when the reservation fails
     }
 
     @Test

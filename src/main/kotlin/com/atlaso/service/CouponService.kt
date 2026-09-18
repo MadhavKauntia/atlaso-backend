@@ -91,6 +91,14 @@ class CouponService(
         coupon.id?.let { couponRepository.incrementUsage(it) }
     }
 
+    /**
+     * Atomically reserves one redemption if the coupon is still under its cap. Returns true when
+     * reserved. Unlike [recordRedemption] this is the authoritative cap enforcement — call it inside
+     * the order transaction so the reservation rolls back if the order does (free-order path).
+     */
+    fun tryReserveRedemption(coupon: Coupon): Boolean =
+        coupon.id?.let { couponRepository.tryReserveRedemption(it) > 0 } ?: false
+
     /** Returns null when eligible, otherwise a human-readable reason. */
     private fun checkEligibility(coupon: Coupon, amountMinor: Long): String? {
         if (!coupon.active) return "This coupon is no longer active"

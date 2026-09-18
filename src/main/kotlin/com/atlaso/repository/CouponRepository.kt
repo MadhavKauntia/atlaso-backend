@@ -16,4 +16,13 @@ interface CouponRepository : JpaRepository<Coupon, UUID> {
     @Modifying
     @Query("UPDATE Coupon c SET c.usedCount = c.usedCount + 1 WHERE c.id = :id")
     fun incrementUsage(@Param("id") id: UUID)
+
+    /**
+     * Atomically reserves one redemption, but only if the coupon is still under its cap. Returns the
+     * number of rows updated: 1 when reserved, 0 when already at maxUses. The cap guard lives in the
+     * WHERE clause so concurrent redemptions can't drive usedCount past maxUses (free-order path).
+     */
+    @Modifying
+    @Query("UPDATE Coupon c SET c.usedCount = c.usedCount + 1 WHERE c.id = :id AND (c.maxUses IS NULL OR c.usedCount < c.maxUses)")
+    fun tryReserveRedemption(@Param("id") id: UUID): Int
 }
