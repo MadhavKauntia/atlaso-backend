@@ -72,6 +72,23 @@ class OrderService(
 
         val tripId = checkout.tripId
         val userId = checkout.userId
+
+        // Serialize all order finalization on the trip row (the free path takes the same lock), then
+        // enforce one order per trip across every path.
+        tripRepository.findByIdForUpdate(tripId)
+        // Re-check under the lock: a concurrent /verify or webhook for THIS payment may have committed
+        // between the early guard above and acquiring the lock.
+        orderRepository.findByRazorpayPaymentId(razorpayPaymentId)?.let { return it }
+        // A different order already finalized this trip (a free order, or another payment). Don't
+        // create a second one. This payment WAS captured, so flag it loudly for reconciliation/refund.
+        orderRepository.findFirstByTripIdOrderByCreatedAtDesc(tripId)?.let { existing ->
+            logger.error(
+                "Captured payment {} for trip {} which already has order ATL-{}; not creating a second order — likely needs a refund",
+                razorpayPaymentId, tripId, existing.number
+            )
+            return existing
+        }
+
         val trip = tripService.getTrip(tripId, userId) // ownership re-check
         val user = userRepository.findById(userId).orElse(null)
 

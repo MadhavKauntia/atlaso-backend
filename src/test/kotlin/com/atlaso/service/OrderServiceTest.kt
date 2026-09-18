@@ -125,6 +125,20 @@ class OrderServiceTest {
         assertEquals("+919876543210", order.phone)
     }
 
+    @Test
+    fun `recordPaidOrder does not create a second order when the trip already has one`() {
+        whenever(payment.fetchPayment(any())).thenReturn(pay())
+        val existing = Order(number = 1L, trip = Trip(id = tripId, name = "T", status = TripStatus.ORDERED), amountMinor = 0L)
+        whenever(orderRepo.findFirstByTripIdOrderByCreatedAtDesc(tripId)).thenReturn(existing)
+
+        val result = svc.recordPaidOrder(checkout(), "pay_NEW")
+
+        assertSame(existing, result)
+        verify(tripRepo).findByIdForUpdate(tripId) // serialized on the trip
+        verify(orderRepo, never()).save(any())     // no duplicate order for the trip
+        verify(tripService, never()).updateStatus(any(), any())
+    }
+
     // --- Free orders (full-discount coupon, no payment) ---
 
     private fun shipping() = ValidatedShipping(
