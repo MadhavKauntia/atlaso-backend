@@ -287,7 +287,8 @@ class BookGenerationService(
         templateId: String?,
         paletteId: String?,
         country: String? = null,
-        subtitle: String? = null
+        subtitle: String? = null,
+        title: String? = null
     ): Book {
         val book = bookRepository.findByIdAndTripUserId(bookId, userId)
             .orElseThrow { BookNotFoundException(bookId) }
@@ -295,6 +296,8 @@ class BookGenerationService(
         paletteId?.let { book.coverPaletteId = it }
         country?.let { book.coverCountry = it }
         subtitle?.let { book.subtitle = it.ifBlank { null } }
+        // title is NOT NULL; only overwrite when a non-blank value is supplied.
+        title?.takeIf { it.isNotBlank() }?.let { book.title = it }
         return bookRepository.save(book)
     }
 

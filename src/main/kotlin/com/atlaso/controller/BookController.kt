@@ -21,7 +21,8 @@ data class CoverConfigRequest(
     val templateId: String? = null,
     val paletteId: String? = null,
     val country: String? = null,
-    val subtitle: String? = null
+    val subtitle: String? = null,
+    val title: String? = null
 )
 data class ExportBookRequest(val coverImageBase64: String?, val backImageBase64: String? = null)
 data class GenerateBookRequest(val country: String? = null, val subtitle: String? = null)
@@ -108,7 +109,7 @@ class BookController(
         @AuthenticationPrincipal jwt: Jwt
     ): ResponseEntity<BookResponse> {
         val userId = UUID.fromString(jwt.subject)
-        val book = bookGenerationService.saveCoverConfig(bookId, userId, body.templateId, body.paletteId, body.country, body.subtitle)
+        val book = bookGenerationService.saveCoverConfig(bookId, userId, body.templateId, body.paletteId, body.country, body.subtitle, body.title)
         return ResponseEntity.ok(BookResponse.from(book))
     }
 
