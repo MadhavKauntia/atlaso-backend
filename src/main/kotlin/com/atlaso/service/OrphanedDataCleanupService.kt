@@ -50,7 +50,8 @@ class OrphanedDataCleanupService(
         val candidates = tripRepository.findByUserIsNullAndCreatedAtBefore(
             emptyCutoff, PageRequest.of(0, props.batchSize, Sort.by("createdAt").ascending())
         )
-        if (candidates.isEmpty()) return
+        // Fall through even when empty so every run logs a summary — a heartbeat for a job that
+        // deletes data. An empty run is the common case and just reports candidates=0.
 
         var deletedTrips = 0
         var deletedObjects = 0
