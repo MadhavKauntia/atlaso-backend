@@ -16,7 +16,8 @@ class TripServiceTest {
 
     private val tripRepo = mock<TripRepository>()
     private val userRepo = mock<UserRepository>()
-    private val svc = TripService(tripRepo, userRepo)
+    private val storagePurger = mock<TripStoragePurger>()
+    private val svc = TripService(tripRepo, userRepo, storagePurger)
 
     /** createTrip → returns a token and stores its hash; findById returns the saved trip. */
     private fun newTrip(): Pair<Trip, String> {

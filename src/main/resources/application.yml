@@ -96,6 +96,13 @@ atlaso:
     s3:
       bucket-name: "${S3_BUCKET_NAME:}"
       region: "${AWS_REGION:us-east-1}"
+  cleanup:
+    # Scheduled removal of abandoned unclaimed guest trips (+ their S3 objects). Set enabled=false
+    # to make the job log-only (it reports what it would delete but changes nothing).
+    enabled: ${CLEANUP_ENABLED:true}
+    photo-trip-cutoff-hours: ${CLEANUP_PHOTO_TRIP_CUTOFF_HOURS:168}  # 7 days
+    empty-trip-cutoff-hours: ${CLEANUP_EMPTY_TRIP_CUTOFF_HOURS:72}   # 3 days
+    batch-size: ${CLEANUP_BATCH_SIZE:200}
 
 logging:
   level:

@@ -24,7 +24,8 @@ data class TripWithToken(val trip: Trip, val guestToken: String)
 @Transactional
 class TripService(
     private val tripRepository: TripRepository,
-    private val userRepository: UserRepository
+    private val userRepository: UserRepository,
+    private val tripStoragePurger: TripStoragePurger
 ) {
     private val logger = LoggerFactory.getLogger(TripService::class.java)
     private val secureRandom = SecureRandom()
@@ -135,7 +136,13 @@ class TripService(
 
     fun deleteTrip(id: UUID, userId: UUID) {
         val trip = getTrip(id, userId)
+        // Delete the trip's S3 objects (photos, thumbnails, grant reservations, book PDFs) up front —
+        // the DB rows cascade on trip delete, but the objects would otherwise be orphaned forever.
+        // Best-effort: a failed object delete is logged but must not block the user's delete.
+        if (!tripStoragePurger.purge(id)) {
+            logger.warn("Some S3 objects for trip {} could not be deleted; proceeding with DB delete", id)
+        }
         tripRepository.delete(trip)
-        logger.info("Deleted trip: {} for user: {}", id, userId)
+        logger.info("Deleted trip: {} for user: {} (storage purged)", id, userId)
     }
 }

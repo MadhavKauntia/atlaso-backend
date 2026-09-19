@@ -7,6 +7,9 @@ import java.util.UUID
 
 interface OrderRepository : JpaRepository<Order, UUID> {
     fun findFirstByTripIdOrderByCreatedAtDesc(tripId: UUID): Order?
+
+    /** Cheap protection check for cleanup — a trip with any order is never an orphan. */
+    fun existsByTripId(tripId: UUID): Boolean
     fun findByRazorpayPaymentId(razorpayPaymentId: String): Order?
     fun findAllByOrderByCreatedAtDesc(): List<Order>
 
