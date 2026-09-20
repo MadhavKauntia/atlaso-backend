@@ -11,6 +11,7 @@ import com.atlaso.domain.photo.Photo
 import com.atlaso.domain.trip.TripStatus
 import com.atlaso.domain.trip.Trip
 import com.atlaso.repository.BookRepository
+import com.atlaso.repository.OrderRepository
 import com.atlaso.repository.PageRepository
 import com.atlaso.repository.PhotoRepository
 import com.atlaso.repository.TripRepository
@@ -30,11 +31,13 @@ class NoPhotosAvailableException(tripId: UUID) : RuntimeException("No photos ava
 class FreePreviewQuotaExceededException(userId: UUID) : RuntimeException("Free preview quota exhausted for user: $userId")
 class InsufficientPhotosException(val needed: Int, val available: Int) :
     RuntimeException("Not enough unused photos to fill this layout: need $needed more, $available available")
+class BookLockedException(id: UUID) : RuntimeException("Book has a placed order and can no longer be edited: $id")
 
 @Service
 @Transactional
 class BookGenerationService(
     private val bookRepository: BookRepository,
+    private val orderRepository: OrderRepository,
     private val photoRepository: PhotoRepository,
     private val pageRepository: PageRepository,
     private val userRepository: UserRepository,
@@ -281,6 +284,27 @@ class BookGenerationService(
     }
 
     @Transactional
+    /**
+     * Once a trip has a placed (PAID) order, its book is frozen — the exact PDF that was
+     * purchased is heading to print, so we reject further edits rather than let it silently
+     * change underneath fulfilment.
+     */
+    private fun assertEditable(tripId: UUID, bookId: UUID) {
+        val order = orderRepository.findFirstByTripIdOrderByCreatedAtDesc(tripId)
+        if (order?.status == "PAID") throw BookLockedException(bookId)
+    }
+
+    /**
+     * Any edit invalidates the exported PDF, so drop a PDF_READY book back to
+     * READY_FOR_PREVIEW; the order/checkout flow then re-exports before purchase. Only
+     * downgrades from PDF_READY so we never clobber GENERATING / EXPORTING_PDF / FAILED.
+     */
+    private fun invalidateExport(book: Book) {
+        if (book.status == BookStatus.PDF_READY) {
+            book.status = BookStatus.READY_FOR_PREVIEW
+        }
+    }
+
     fun saveCoverConfig(
         bookId: UUID,
         userId: UUID,
@@ -292,12 +316,14 @@ class BookGenerationService(
     ): Book {
         val book = bookRepository.findByIdAndTripUserId(bookId, userId)
             .orElseThrow { BookNotFoundException(bookId) }
+        assertEditable(book.trip.id!!, bookId)
         templateId?.let { book.coverTemplateId = it }
         paletteId?.let { book.coverPaletteId = it }
         country?.let { book.coverCountry = it }
         subtitle?.let { book.subtitle = it.ifBlank { null } }
         // title is NOT NULL; only overwrite when a non-blank value is supplied.
         title?.takeIf { it.isNotBlank() }?.let { book.title = it }
+        invalidateExport(book)
         return bookRepository.save(book)
     }
 
@@ -307,6 +333,8 @@ class BookGenerationService(
         if (page.book?.trip?.user?.id != userId) {
             throw PageNotFoundException(pageId)
         }
+        val book = page.book!!
+        assertEditable(book.trip.id!!, book.id!!)
         require(slotIndex in page.slots.indices) { "Slot index $slotIndex out of range" }
         val updatedSlots = page.slots.toMutableList()
         updatedSlots[slotIndex] = updatedSlots[slotIndex].copy(
@@ -315,6 +343,8 @@ class BookGenerationService(
         )
         val updatedPage = page.copy(slots = updatedSlots)
         pageRepository.save(updatedPage)
+        invalidateExport(book)
+        bookRepository.save(book)
         logger.info("Updated slot {}/{} offset to ({}, {})", pageId, slotIndex, offsetX, offsetY)
     }
 
@@ -325,6 +355,8 @@ class BookGenerationService(
         if (trip?.user?.id != userId) {
             throw PageNotFoundException(pageId)
         }
+        val book = page.book!!
+        assertEditable(trip.id!!, book.id!!)
         require(slotIndex in page.slots.indices) { "Slot index $slotIndex out of range" }
         // The replacement photo must belong to the same trip.
         photoRepository.findByIdAndTripId(photoId, trip.id!!)
@@ -339,6 +371,8 @@ class BookGenerationService(
         )
         val updatedPage = page.copy(slots = updatedSlots)
         pageRepository.save(updatedPage)
+        invalidateExport(book)
+        bookRepository.save(book)
         logger.info("Replaced slot {}/{} photo with {}", pageId, slotIndex, photoId)
     }
 
@@ -367,6 +401,7 @@ class BookGenerationService(
         if (trip?.user?.id != userId) {
             throw PageNotFoundException(pageId)
         }
+        assertEditable(trip.id!!, book.id!!)
 
         val targetCount = newLayout.slotCount
         // Keep the first min(current, target) photos, in their existing order.
@@ -400,6 +435,8 @@ class BookGenerationService(
         }
 
         pageRepository.save(page.copy(layout = newLayout, slots = newSlots))
+        invalidateExport(book)
+        bookRepository.save(book)
         logger.info(
             "Changed page {} layout {} -> {} ({} slots, {} filled from pool)",
             pageId, page.layout, newLayout, targetCount, fillers.size
@@ -428,6 +465,7 @@ class BookGenerationService(
         if (bookA.trip.user?.id != userId || bookB.trip.user?.id != userId || bookA.id != bookB.id) {
             throw PageNotFoundException(pageBId)
         }
+        assertEditable(bookA.trip.id!!, bookA.id!!)
         require(slotA in pageA.slots.indices) { "Slot index $slotA out of range" }
         require(slotB in pageB.slots.indices) { "Slot index $slotB out of range" }
         if (pageAId == pageBId && slotA == slotB) return // no-op
@@ -455,6 +493,8 @@ class BookGenerationService(
             pageRepository.save(pageA.copy(slots = slotsA))
             pageRepository.save(pageB.copy(slots = slotsB))
         }
+        invalidateExport(bookA)
+        bookRepository.save(bookA)
         logger.info("Swapped slot {}/{} with {}/{}", pageAId, slotA, pageBId, slotB)
     }
 }

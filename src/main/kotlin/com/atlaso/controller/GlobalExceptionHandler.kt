@@ -1,6 +1,7 @@
 package com.atlaso.controller
 
 import com.atlaso.controller.dto.ErrorResponse
+import com.atlaso.service.BookLockedException
 import com.atlaso.service.BookNotFoundException
 import com.atlaso.service.FreePreviewQuotaExceededException
 import com.atlaso.service.GuestTokenException
@@ -41,6 +42,13 @@ class GlobalExceptionHandler {
     @ExceptionHandler(PageNotFoundException::class)
     fun handlePageNotFound(ex: PageNotFoundException, request: HttpServletRequest): ResponseEntity<ErrorResponse> {
         return buildResponse(HttpStatus.NOT_FOUND, ex.message, request)
+    }
+
+    // 409 when an edit is attempted on a book whose order is already placed — the purchased
+    // PDF is frozen for fulfilment, so we send a fixed, user-facing message.
+    @ExceptionHandler(BookLockedException::class)
+    fun handleBookLocked(ex: BookLockedException, request: HttpServletRequest): ResponseEntity<ErrorResponse> {
+        return buildResponse(HttpStatus.CONFLICT, "This book has already been ordered and can no longer be edited.", request)
     }
 
     @ExceptionHandler(NoPhotosAvailableException::class)

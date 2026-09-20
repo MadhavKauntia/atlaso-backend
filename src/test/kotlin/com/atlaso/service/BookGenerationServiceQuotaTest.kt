@@ -8,6 +8,7 @@ import com.atlaso.domain.trip.Trip
 import com.atlaso.domain.trip.TripStatus
 import com.atlaso.domain.user.User
 import com.atlaso.repository.BookRepository
+import com.atlaso.repository.OrderRepository
 import com.atlaso.repository.PageRepository
 import com.atlaso.repository.PhotoRepository
 import com.atlaso.repository.TripRepository
@@ -38,7 +39,7 @@ class BookGenerationServiceQuotaTest {
     private val tripService = mock<TripService>()
     private val processor = mock<BookGenerationProcessor>()
     private val service = BookGenerationService(
-        bookRepository, mock<PhotoRepository>(), mock<PageRepository>(), userRepository, tripRepository,
+        bookRepository, mock<OrderRepository>(), mock<PhotoRepository>(), mock<PageRepository>(), userRepository, tripRepository,
         mock<PhotoAnalysisService>(), mock<PhotoSelector>(), mock<LayoutEngine>(), tripService,
         mock<BookPlanExplainer>(), mock<EmailService>(), mock<StorageService>(), processor, false
     )
