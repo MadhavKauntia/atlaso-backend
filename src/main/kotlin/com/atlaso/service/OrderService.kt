@@ -16,7 +16,7 @@ import org.springframework.transaction.support.TransactionSynchronization
 import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.util.UUID
 
-private const val UNIT_PRICE_MINOR = Pricing.UNIT_PRICE_MINOR // Rs. 1999 in paise (launch price)
+private const val UNIT_PRICE_MINOR = Pricing.UNIT_PRICE_MINOR // Rs. 2499 in paise
 
 /** Thrown when a captured payment fails server-side verification (status/amount/order/ownership). */
 class PaymentVerificationException(message: String) : RuntimeException(message)
