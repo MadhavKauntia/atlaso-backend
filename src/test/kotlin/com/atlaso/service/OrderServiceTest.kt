@@ -39,7 +39,7 @@ class OrderServiceTest {
 
     private val tripId = UUID.randomUUID()
     private val userId = UUID.randomUUID()
-    private val expected = 249900L // 1 unit
+    private val expected = 199900L // 1 unit
 
     private fun checkout() = Checkout(
         id = UUID.randomUUID(), razorpayOrderId = "order_1", tripId = tripId, userId = userId,

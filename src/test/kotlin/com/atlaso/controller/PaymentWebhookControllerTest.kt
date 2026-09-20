@@ -30,7 +30,7 @@ class PaymentWebhookControllerTest {
 
     private fun checkout() = Checkout(
         id = UUID.randomUUID(), razorpayOrderId = "order_1", tripId = UUID.randomUUID(),
-        userId = UUID.randomUUID(), quantity = 1, amountMinor = 249900,
+        userId = UUID.randomUUID(), quantity = 1, amountMinor = 199900,
     )
 
     @BeforeEach

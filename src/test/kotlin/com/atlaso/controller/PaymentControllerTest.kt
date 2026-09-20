@@ -34,7 +34,7 @@ class PaymentControllerTest {
 
     private fun checkout(owner: UUID) = Checkout(
         id = UUID.randomUUID(), razorpayOrderId = "order_1", tripId = UUID.randomUUID(),
-        userId = owner, quantity = 1, amountMinor = 249900
+        userId = owner, quantity = 1, amountMinor = 199900
     )
 
     @Test
