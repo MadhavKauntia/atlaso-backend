@@ -369,6 +369,26 @@ class BookGenerationService(
         logger.info("Updated slot {}/{} zoom to {}", pageId, slotIndex, zoomScale)
     }
 
+    fun updateSlotRotation(pageId: UUID, slotIndex: Int, rotation: Int, userId: UUID) {
+        val page = pageRepository.findByIdForUpdate(pageId)
+            .orElseThrow { PageNotFoundException(pageId) }
+        if (page.book?.trip?.user?.id != userId) {
+            throw PageNotFoundException(pageId)
+        }
+        val book = page.book!!
+        assertEditable(book.trip.id!!, book.id!!)
+        require(slotIndex in page.slots.indices) { "Slot index $slotIndex out of range" }
+        // Normalise to 0/90/180/270; the PDF renderer rotates the bitmap by this amount.
+        val norm = ((rotation % 360) + 360) % 360
+        val updatedSlots = page.slots.toMutableList()
+        updatedSlots[slotIndex] = updatedSlots[slotIndex].copy(rotation = norm)
+        val updatedPage = page.copy(slots = updatedSlots)
+        pageRepository.save(updatedPage)
+        invalidateExport(book)
+        bookRepository.save(book)
+        logger.info("Updated slot {}/{} rotation to {}", pageId, slotIndex, norm)
+    }
+
     fun updateSlotPhoto(pageId: UUID, slotIndex: Int, photoId: UUID, userId: UUID) {
         val page = pageRepository.findByIdForUpdate(pageId)
             .orElseThrow { PageNotFoundException(pageId) }
