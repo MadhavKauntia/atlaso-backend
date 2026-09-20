@@ -15,6 +15,7 @@ import com.atlaso.domain.trip.Trip
 import com.atlaso.domain.trip.TripStatus
 import com.atlaso.domain.user.User
 import com.atlaso.repository.BookRepository
+import com.atlaso.repository.OrderRepository
 import com.atlaso.repository.PageRepository
 import com.atlaso.repository.PhotoRepository
 import com.atlaso.repository.TripRepository
@@ -47,7 +48,7 @@ class BookGenerationServiceLayoutTest {
     private val tripRepository = mock<TripRepository>()
     private val layoutEngine = mock<LayoutEngine>()
     private val service = BookGenerationService(
-        bookRepository, photoRepository, pageRepository, mock<UserRepository>(), tripRepository,
+        bookRepository, mock<OrderRepository>(), photoRepository, pageRepository, mock<UserRepository>(), tripRepository,
         mock<PhotoAnalysisService>(), mock<PhotoSelector>(), layoutEngine, mock<TripService>(),
         mock<BookPlanExplainer>(), mock<EmailService>(), mock<StorageService>(), mock<BookGenerationProcessor>(), false
     )
