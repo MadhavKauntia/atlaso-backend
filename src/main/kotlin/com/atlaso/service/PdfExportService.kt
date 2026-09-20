@@ -73,7 +73,8 @@ class PdfExportService(
                         caption = slot.caption,
                         rotation = slot.rotation,
                         offsetX = slot.offsetX ?: 0.5,
-                        offsetY = slot.offsetY ?: 0.5
+                        offsetY = slot.offsetY ?: 0.5,
+                        zoomScale = slot.zoomScale ?: 1.0
                     )
                 }
                 PageRenderData(

@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.*
 import java.util.UUID
 
 data class SlotOffsetRequest(val offsetX: Double, val offsetY: Double)
+data class SlotZoomRequest(val zoomScale: Double)
 data class SlotPhotoRequest(val photoId: UUID)
 data class PageLayoutRequest(val layout: Layout)
 data class SlotSwapRequest(val pageAId: UUID, val slotA: Int, val pageBId: UUID, val slotB: Int)
@@ -122,6 +123,18 @@ class BookController(
     ): ResponseEntity<Void> {
         val userId = UUID.fromString(jwt.subject)
         bookGenerationService.updateSlotOffset(pageId, slotIndex, body.offsetX, body.offsetY, userId)
+        return ResponseEntity.noContent().build()
+    }
+
+    @PatchMapping("/pages/{pageId}/slots/{slotIndex}/zoom")
+    fun updateSlotZoom(
+        @PathVariable pageId: UUID,
+        @PathVariable slotIndex: Int,
+        @RequestBody body: SlotZoomRequest,
+        @AuthenticationPrincipal jwt: Jwt
+    ): ResponseEntity<Void> {
+        val userId = UUID.fromString(jwt.subject)
+        bookGenerationService.updateSlotZoom(pageId, slotIndex, body.zoomScale, userId)
         return ResponseEntity.noContent().build()
     }
 

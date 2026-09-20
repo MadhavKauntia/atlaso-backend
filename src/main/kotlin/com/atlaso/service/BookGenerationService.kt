@@ -348,6 +348,27 @@ class BookGenerationService(
         logger.info("Updated slot {}/{} offset to ({}, {})", pageId, slotIndex, offsetX, offsetY)
     }
 
+    fun updateSlotZoom(pageId: UUID, slotIndex: Int, zoomScale: Double, userId: UUID) {
+        val page = pageRepository.findByIdForUpdate(pageId)
+            .orElseThrow { PageNotFoundException(pageId) }
+        if (page.book?.trip?.user?.id != userId) {
+            throw PageNotFoundException(pageId)
+        }
+        val book = page.book!!
+        assertEditable(book.trip.id!!, book.id!!)
+        require(slotIndex in page.slots.indices) { "Slot index $slotIndex out of range" }
+        val updatedSlots = page.slots.toMutableList()
+        // Zoom-in only: below 1.0 the photo would be smaller than the slot and leave gaps.
+        updatedSlots[slotIndex] = updatedSlots[slotIndex].copy(
+            zoomScale = zoomScale.coerceIn(1.0, 3.0)
+        )
+        val updatedPage = page.copy(slots = updatedSlots)
+        pageRepository.save(updatedPage)
+        invalidateExport(book)
+        bookRepository.save(book)
+        logger.info("Updated slot {}/{} zoom to {}", pageId, slotIndex, zoomScale)
+    }
+
     fun updateSlotPhoto(pageId: UUID, slotIndex: Int, photoId: UUID, userId: UUID) {
         val page = pageRepository.findByIdForUpdate(pageId)
             .orElseThrow { PageNotFoundException(pageId) }
@@ -362,11 +383,12 @@ class BookGenerationService(
         photoRepository.findByIdAndTripId(photoId, trip.id!!)
             .orElseThrow { PhotoNotFoundException(photoId) }
         val updatedSlots = page.slots.toMutableList()
-        // New image gets fresh framing: recenter the crop and drop any rotation.
+        // New image gets fresh framing: recenter the crop, reset zoom, and drop any rotation.
         updatedSlots[slotIndex] = updatedSlots[slotIndex].copy(
             photoId = photoId,
             offsetX = null,
             offsetY = null,
+            zoomScale = null,
             rotation = 0
         )
         val updatedPage = page.copy(slots = updatedSlots)
@@ -425,7 +447,7 @@ class BookGenerationService(
             // Retained photos keep their id + intrinsic rotation; only their frame is recentred.
             retained.forEachIndexed { index, slot ->
                 val (position, size) = layoutEngine.getSlotGeometry(newLayout, index, targetCount)
-                add(slot.copy(position = position, size = size, offsetX = null, offsetY = null))
+                add(slot.copy(position = position, size = size, offsetX = null, offsetY = null, zoomScale = null))
             }
             fillers.forEachIndexed { i, photo ->
                 val index = retained.size + i
@@ -479,7 +501,8 @@ class BookGenerationService(
             rotation = source.rotation,
             caption = source.caption,
             offsetX = null,
-            offsetY = null
+            offsetY = null,
+            zoomScale = null
         )
 
         if (pageAId == pageBId) {

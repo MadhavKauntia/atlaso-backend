@@ -27,7 +27,8 @@ data class SlotRenderData(
     val caption: String?,
     val rotation: Int = 0,
     val offsetX: Double = 0.5,
-    val offsetY: Double = 0.5
+    val offsetY: Double = 0.5,
+    val zoomScale: Double = 1.0
 )
 
 data class PageRenderData(
@@ -165,7 +166,7 @@ class PdfRenderer {
                 onError = { attempt, e -> logger.warn("Decode attempt {}/{} failed for slot, retrying", attempt, DECODE_ATTEMPTS, e) }
             ) { loadImage(document, slot.imageBytes, slot.rotation) }
             if (image != null) {
-                drawCoverFitImage(cs, image, slotX, slotY, slotW, slotH, slot.offsetX.toFloat(), slot.offsetY.toFloat())
+                drawCoverFitImage(cs, image, slotX, slotY, slotW, slotH, slot.offsetX.toFloat(), slot.offsetY.toFloat(), slot.zoomScale.toFloat())
             } else {
                 logger.error("Failed to decode slot image after {} attempts; using placeholder", DECODE_ATTEMPTS)
                 drawPlaceholder(cs, slotX, slotY, slotW, slotH)
@@ -308,6 +309,8 @@ class PdfRenderer {
     /**
      * Draws an image using cover-fit (aspect-fill) within the given rectangle, clipping overflow.
      * offsetX/offsetY (0.0–1.0) control the crop anchor: 0=left/top, 0.5=center, 1.0=right/bottom.
+     * zoomScale (>=1.0) zooms further in on top of cover-fit; the offset still anchors the crop.
+     * This mirrors the browser preview's `transform: scale(zoom)` with transform-origin at the offset.
      */
     private fun drawCoverFitImage(
         cs: PDPageContentStream,
@@ -317,12 +320,13 @@ class PdfRenderer {
         boxW: Float,
         boxH: Float,
         offsetX: Float = 0.5f,
-        offsetY: Float = 0.5f
+        offsetY: Float = 0.5f,
+        zoomScale: Float = 1f
     ) {
         val imgW = image.width.toFloat()
         val imgH = image.height.toFloat()
 
-        val scale = maxOf(boxW / imgW, boxH / imgH)
+        val scale = maxOf(boxW / imgW, boxH / imgH) * zoomScale
         val drawW = imgW * scale
         val drawH = imgH * scale
         // Apply offset: 0.0 = align start edges, 1.0 = align end edges
