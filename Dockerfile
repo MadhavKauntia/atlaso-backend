@@ -39,5 +39,12 @@ ENV OTEL_SERVICE_NAME=atlaso-backend \
     OTEL_INSTRUMENTATION_LOGBACK_APPENDER_EXPERIMENTAL_LOG_ATTRIBUTES=true
 
 # Attach the agent (and compose the Axiom OTLP auth header) only when AXIOM_TOKEN is set,
-# so local/unconfigured runs stay clean. Heap is sized to the container (see PDF-export fix).
-ENTRYPOINT ["sh", "-c", "if [ -n \"$AXIOM_TOKEN\" ]; then AGENT=-javaagent:/app/otel-agent.jar; export OTEL_EXPORTER_OTLP_HEADERS=\"Authorization=Bearer $AXIOM_TOKEN,X-Axiom-Dataset=$AXIOM_DATASET\"; fi; exec java $AGENT -XX:MaxRAMPercentage=75.0 -jar /app/app.jar"]
+# so local/unconfigured runs stay clean.
+#
+# Heap: hard-capped instead of MaxRAMPercentage. Railway exposes the full 8 GB plan ceiling
+# to the container, so MaxRAMPercentage=75 sized max heap to ~6 GB — the JVM idled at ~1.1 GB
+# and could ratchet far higher under load (and never return it), which is metered as cost.
+# The render path decodes photos one slot at a time (see PdfRenderer), so peak heap is bounded
+# by a single image, not the whole book; 768 MB is comfortable for a 30-photo export. SerialGC
+# keeps the GC footprint small for this low-traffic single-tenant workload.
+ENTRYPOINT ["sh", "-c", "if [ -n \"$AXIOM_TOKEN\" ]; then AGENT=-javaagent:/app/otel-agent.jar; export OTEL_EXPORTER_OTLP_HEADERS=\"Authorization=Bearer $AXIOM_TOKEN,X-Axiom-Dataset=$AXIOM_DATASET\"; fi; exec java $AGENT -Xms256m -Xmx768m -XX:+UseSerialGC -jar /app/app.jar"]
