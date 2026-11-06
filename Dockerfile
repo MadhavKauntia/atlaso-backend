@@ -47,4 +47,11 @@ ENV OTEL_SERVICE_NAME=atlaso-backend \
 # The render path decodes photos one slot at a time (see PdfRenderer), so peak heap is bounded
 # by a single image, not the whole book; 768 MB is comfortable for a 30-photo export. SerialGC
 # keeps the GC footprint small for this low-traffic single-tenant workload.
-ENTRYPOINT ["sh", "-c", "if [ -n \"$AXIOM_TOKEN\" ]; then AGENT=-javaagent:/app/otel-agent.jar; export OTEL_EXPORTER_OTLP_HEADERS=\"Authorization=Bearer $AXIOM_TOKEN,X-Axiom-Dataset=$AXIOM_DATASET\"; fi; exec java $AGENT -Xms256m -Xmx768m -XX:+UseSerialGC -jar /app/app.jar"]
+#
+# Return memory after spikes: Railway meters container RSS, and by default the JVM keeps a heap
+# it has grown (idle RSS ratcheted 0.66 → 1.04 GB after a single export with zero traffic).
+# Min/MaxHeapFreeRatio make SerialGC shrink the heap back after a full GC. Non-heap is capped
+# too (metaspace, JIT code cache, thread stacks), and MALLOC_ARENA_MAX stops glibc from holding
+# per-thread native arenas (image decoding) that never get released.
+ENV MALLOC_ARENA_MAX=2
+ENTRYPOINT ["sh", "-c", "if [ -n \"$AXIOM_TOKEN\" ]; then AGENT=-javaagent:/app/otel-agent.jar; export OTEL_EXPORTER_OTLP_HEADERS=\"Authorization=Bearer $AXIOM_TOKEN,X-Axiom-Dataset=$AXIOM_DATASET\"; fi; exec java $AGENT -Xms256m -Xmx768m -XX:+UseSerialGC -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=20 -XX:MaxMetaspaceSize=192m -XX:ReservedCodeCacheSize=64m -Xss512k -jar /app/app.jar"]
