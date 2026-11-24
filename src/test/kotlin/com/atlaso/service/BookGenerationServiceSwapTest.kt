@@ -64,8 +64,8 @@ class BookGenerationServiceSwapTest {
     private fun book(id: UUID = UUID.randomUUID()) =
         Book(id = id, trip = trip, version = 1, title = "Bali", status = BookStatus.READY_FOR_PREVIEW)
 
-    private fun page(id: UUID, book: Book, slots: List<PhotoSlot>): Page {
-        val page = Page(id = id, book = book, pageNumber = 2, layout = Layout.TWO_VERTICAL, slots = slots)
+    private fun page(id: UUID, book: Book, slots: List<PhotoSlot>, pageNumber: Int = 2): Page {
+        val page = Page(id = id, book = book, pageNumber = pageNumber, layout = Layout.TWO_VERTICAL, slots = slots)
         whenever(pageRepository.findByIdForUpdate(id)).thenReturn(Optional.of(page))
         return page
     }
@@ -136,6 +136,45 @@ class BookGenerationServiceSwapTest {
         assertThrows(IllegalArgumentException::class.java) {
             service.swapSlots(pageAId, 0, pageAId, 5, userId)
         }
+        verify(pageRepository, never()).save(any<Page>())
+    }
+
+    @Test
+    fun `adjacent page swap exchanges page numbers and keeps content`() {
+        val b = book()
+        val a0 = UUID.randomUUID(); val b0 = UUID.randomUUID()
+        page(pageAId, b, listOf(slot(a0)), pageNumber = 4)
+        page(pageBId, b, listOf(slot(b0)), pageNumber = 5)
+
+        service.swapPages(pageAId, pageBId, userId)
+
+        val captor = argumentCaptor<Page>()
+        verify(pageRepository, org.mockito.kotlin.times(2)).save(captor.capture())
+        val savedA = captor.allValues.first { it.id == pageAId }
+        val savedB = captor.allValues.first { it.id == pageBId }
+        assertEquals(5, savedA.pageNumber)
+        assertEquals(4, savedB.pageNumber)
+        assertEquals(a0, savedA.slots[0].photoId) // content travels with the page
+        assertEquals(0.8, savedA.slots[0].offsetX) // framing untouched
+    }
+
+    @Test
+    fun `non-adjacent page swap is rejected`() {
+        val b = book()
+        page(pageAId, b, listOf(slot(UUID.randomUUID())), pageNumber = 2)
+        page(pageBId, b, listOf(slot(UUID.randomUUID())), pageNumber = 5)
+
+        assertThrows(IllegalArgumentException::class.java) { service.swapPages(pageAId, pageBId, userId) }
+        verify(pageRepository, never()).save(any<Page>())
+    }
+
+    @Test
+    fun `page swap across books or users is not found`() {
+        page(pageAId, book(), listOf(slot(UUID.randomUUID())), pageNumber = 2)
+        page(pageBId, book(), listOf(slot(UUID.randomUUID())), pageNumber = 3)
+
+        assertThrows(PageNotFoundException::class.java) { service.swapPages(pageAId, pageBId, userId) }
+        assertThrows(PageNotFoundException::class.java) { service.swapPages(pageAId, pageBId, UUID.randomUUID()) }
         verify(pageRepository, never()).save(any<Page>())
     }
 }

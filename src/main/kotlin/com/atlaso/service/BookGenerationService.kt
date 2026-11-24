@@ -540,4 +540,33 @@ class BookGenerationService(
         bookRepository.save(bookA)
         logger.info("Swapped slot {}/{} with {}/{}", pageAId, slotA, pageBId, slotB)
     }
+
+    /**
+     * Swaps two adjacent pages of the same book (the "swap pages" button on a preview spread) by
+     * exchanging their page numbers. Each page keeps its layout, slots and framing; only its
+     * position in the book changes. Non-adjacent pairs are rejected: the UI only offers facing pages.
+     */
+    @Transactional
+    fun swapPages(pageAId: UUID, pageBId: UUID, userId: UUID) {
+        require(pageAId != pageBId) { "Can't swap a page with itself" }
+        // Same deterministic lock order as swapSlots, so a concurrent slot edit can't interleave.
+        val locked = listOf(pageAId, pageBId).sorted()
+            .associateWith { id -> pageRepository.findByIdForUpdate(id).orElseThrow { PageNotFoundException(id) } }
+        val pageA = locked.getValue(pageAId)
+        val pageB = locked.getValue(pageBId)
+
+        val bookA = pageA.book ?: throw PageNotFoundException(pageAId)
+        val bookB = pageB.book ?: throw PageNotFoundException(pageBId)
+        if (bookA.trip.user?.id != userId || bookB.trip.user?.id != userId || bookA.id != bookB.id) {
+            throw PageNotFoundException(pageBId)
+        }
+        assertEditable(bookA.trip.id!!, bookA.id!!)
+        require(kotlin.math.abs(pageA.pageNumber - pageB.pageNumber) == 1) { "Only adjacent pages can be swapped" }
+
+        pageRepository.save(pageA.copy(pageNumber = pageB.pageNumber))
+        pageRepository.save(pageB.copy(pageNumber = pageA.pageNumber))
+        invalidateExport(bookA)
+        bookRepository.save(bookA)
+        logger.info("Swapped pages {} (#{}) and {} (#{})", pageAId, pageA.pageNumber, pageBId, pageB.pageNumber)
+    }
 }
