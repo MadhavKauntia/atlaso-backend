@@ -201,7 +201,7 @@ class PhotoUploadService(
             // on THIS trip can be confirmed, once, before it expires.
             val grant = uploadGrantRepository.findByPhotoIdAndTripId(conf.photoId, tripId)
                 ?: throw IllegalArgumentException("No upload was initiated for this photo")
-            require(grant.createdAt.isAfter(cutoff)) { "This upload has expired — please re-upload" }
+            require(grant.createdAt.isAfter(cutoff)) { "This upload has expired. Please re-upload." }
             require(grant.storageKey == conf.storageKey) { "Storage key does not match the initiated upload" }
             require(grant.thumbnailKey == conf.thumbnailStorageKey) { "Thumbnail key does not match the initiated upload" }
 

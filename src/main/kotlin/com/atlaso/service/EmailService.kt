@@ -137,7 +137,7 @@ class EmailService(
         val body = mutableMapOf<String, Any>(
             "sender" to mapOf("name" to senderName, "email" to senderEmail),
             "to" to listOf(mapOf("email" to to, "name" to (order.customerName ?: to))),
-            "subject" to "Your Atlaso order is confirmed — ATL-${order.number}",
+            "subject" to "Your Atlaso order is confirmed: ATL-${order.number}",
             "htmlContent" to buildHtml(order),
         )
         if (receiptPdf != null) {

@@ -173,7 +173,7 @@ class PaymentController(
                     mapOf(
                         "verified" to false,
                         "alreadyOrdered" to true,
-                        "error" to "This trip already has an order. Your payment will be refunded — if you don't see it shortly, please contact support.",
+                        "error" to "This trip already has an order. Your payment will be refunded. If you don't see it shortly, please contact support.",
                     )
                 )
             } else {
