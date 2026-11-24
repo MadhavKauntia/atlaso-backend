@@ -563,10 +563,15 @@ class BookGenerationService(
         assertEditable(bookA.trip.id!!, bookA.id!!)
         require(kotlin.math.abs(pageA.pageNumber - pageB.pageNumber) == 1) { "Only adjacent pages can be swapped" }
 
-        pageRepository.save(pageA.copy(pageNumber = pageB.pageNumber))
-        pageRepository.save(pageB.copy(pageNumber = pageA.pageNumber))
+        // Capture both numbers BEFORE saving: pageA/pageB are the managed entities, and save()
+        // merges the copy back onto them, so reading pageA.pageNumber after the first save would
+        // see the new value and give both pages the same number.
+        val numberA = pageA.pageNumber
+        val numberB = pageB.pageNumber
+        pageRepository.save(pageA.copy(pageNumber = numberB))
+        pageRepository.save(pageB.copy(pageNumber = numberA))
         invalidateExport(bookA)
         bookRepository.save(bookA)
-        logger.info("Swapped pages {} (#{}) and {} (#{})", pageAId, pageA.pageNumber, pageBId, pageB.pageNumber)
+        logger.info("Swapped pages {} (#{}) and {} (#{})", pageAId, numberA, pageBId, numberB)
     }
 }

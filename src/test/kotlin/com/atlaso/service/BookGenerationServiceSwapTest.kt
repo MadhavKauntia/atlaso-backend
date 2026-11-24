@@ -177,4 +177,30 @@ class BookGenerationServiceSwapTest {
         assertThrows(PageNotFoundException::class.java) { service.swapPages(pageAId, pageBId, UUID.randomUUID()) }
         verify(pageRepository, never()).save(any<Page>())
     }
+
+    @Test
+    fun `page swap survives save merging state back onto the managed entities`() {
+        // Real JPA save() merges the copy onto the managed (locked) instance. Emulate that, so a
+        // swap that reads a page number after the first save is caught (it used to give both
+        // pages the same number, after which swapping back failed as "not adjacent").
+        val b = book()
+        val pages = mapOf(
+            pageAId to page(pageAId, b, listOf(slot(UUID.randomUUID())), pageNumber = 4),
+            pageBId to page(pageBId, b, listOf(slot(UUID.randomUUID())), pageNumber = 5),
+        )
+        val field = Page::class.java.getDeclaredField("pageNumber").apply { isAccessible = true }
+        whenever(pageRepository.save(any<Page>())).thenAnswer {
+            val saved = it.arguments[0] as Page
+            field.setInt(pages.getValue(saved.id!!), saved.pageNumber)
+            saved
+        }
+
+        service.swapPages(pageAId, pageBId, userId)
+        assertEquals(5, pages.getValue(pageAId).pageNumber)
+        assertEquals(4, pages.getValue(pageBId).pageNumber)
+
+        service.swapPages(pageAId, pageBId, userId) // swapping back must work
+        assertEquals(4, pages.getValue(pageAId).pageNumber)
+        assertEquals(5, pages.getValue(pageBId).pageNumber)
+    }
 }
