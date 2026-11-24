@@ -20,6 +20,7 @@ data class SlotPhotoRequest(val photoId: UUID)
 data class PageLayoutRequest(val layout: Layout)
 data class SlotSwapRequest(val pageAId: UUID, val slotA: Int, val pageBId: UUID, val slotB: Int)
 data class PageSwapRequest(val pageAId: UUID, val pageBId: UUID)
+data class PageOrderRequest(val pageIds: List<UUID>)
 data class CoverConfigRequest(
     val templateId: String? = null,
     val paletteId: String? = null,
@@ -192,6 +193,17 @@ class BookController(
     ): ResponseEntity<Void> {
         val userId = UUID.fromString(jwt.subject)
         bookGenerationService.swapPages(body.pageAId, body.pageBId, userId)
+        return ResponseEntity.noContent().build()
+    }
+
+    @PatchMapping("/books/{bookId}/pages/order")
+    fun reorderPages(
+        @PathVariable bookId: UUID,
+        @RequestBody body: PageOrderRequest,
+        @AuthenticationPrincipal jwt: Jwt
+    ): ResponseEntity<Void> {
+        val userId = UUID.fromString(jwt.subject)
+        bookGenerationService.reorderPages(bookId, body.pageIds, userId)
         return ResponseEntity.noContent().build()
     }
 

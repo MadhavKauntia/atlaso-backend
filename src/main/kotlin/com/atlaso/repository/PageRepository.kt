@@ -11,6 +11,8 @@ import java.util.UUID
 interface PageRepository : JpaRepository<Page, UUID> {
     fun findByBookIdOrderByPageNumberAsc(bookId: UUID): List<Page>
 
+    fun countByBookId(bookId: UUID): Long
+
     /** Row-locks a page so read-modify-write slot edits (swap/offset/photo) can't lost-update
      *  each other under concurrent fire-and-forget requests. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)

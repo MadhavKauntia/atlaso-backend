@@ -574,4 +574,41 @@ class BookGenerationService(
         bookRepository.save(bookA)
         logger.info("Swapped pages {} (#{}) and {} (#{})", pageAId, numberA, pageBId, numberB)
     }
+
+    /**
+     * Sets the order of a book's pages (drag-to-rearrange on the preview). [pageIds] must list every
+     * page of the book exactly once, in the new order; page N gets pageNumber N+1. Sending the whole
+     * order makes the call idempotent, so a retried request can't leave the book in a mixed state.
+     * Pages keep their layout, slots and framing.
+     */
+    @Transactional
+    fun reorderPages(bookId: UUID, pageIds: List<UUID>, userId: UUID) {
+        val book = bookRepository.findByIdAndTripUserId(bookId, userId)
+            .orElseThrow { BookNotFoundException(bookId) }
+        assertEditable(book.trip.id!!, book.id!!)
+        require(pageIds.isNotEmpty()) { "Page order is empty" }
+        require(pageIds.toSet().size == pageIds.size) { "Page order lists a page more than once" }
+
+        // Lock every page in the same deterministic (sorted id) order swapSlots/swapPages use, so a
+        // concurrent slot or page swap can't deadlock with this, and so we read fresh numbers.
+        val locked = pageIds.sorted()
+            .associateWith { id -> pageRepository.findByIdForUpdate(id).orElseThrow { PageNotFoundException(id) } }
+        require(locked.values.all { it.book?.id == bookId }) { "Page order includes a page from another book" }
+        require(pageRepository.countByBookId(bookId) == pageIds.size.toLong()) {
+            "Page order must list every page of this book"
+        }
+
+        // Targets come only from the request's positions, decided before any save. save() merges each
+        // copy back onto the managed entity, so nothing below may read a page number after saving.
+        val changes = pageIds.mapIndexedNotNull { index, id ->
+            val page = locked.getValue(id)
+            val target = index + 1
+            if (page.pageNumber != target) page to target else null
+        }
+        if (changes.isEmpty()) return
+        changes.forEach { (page, target) -> pageRepository.save(page.copy(pageNumber = target)) }
+        invalidateExport(book)
+        bookRepository.save(book)
+        logger.info("Reordered book {}: {} of {} pages moved", bookId, changes.size, pageIds.size)
+    }
 }
