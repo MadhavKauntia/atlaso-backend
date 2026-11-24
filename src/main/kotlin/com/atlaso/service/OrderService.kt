@@ -127,6 +127,7 @@ class OrderService(
             couponCode = coupon?.code,
             razorpayOfferId = coupon?.razorpayOfferId,
             discountMinor = discountMinor,
+            partnerName = coupon?.partnerNameOrNull(),
             status = "PAID",
         )
         val saved = orderRepository.save(order)
@@ -220,6 +221,7 @@ class OrderService(
             couponCode = coupon.code,
             razorpayOfferId = null,
             discountMinor = listMinor, // the full list price was waived
+            partnerName = coupon.partnerNameOrNull(),
             status = "PAID",
         )
         val saved = orderRepository.save(order)

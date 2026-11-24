@@ -36,10 +36,17 @@ class AdminCouponController(
         require(req.fullDiscount || offerId != null) {
             "razorpayOfferId is required unless fullDiscount is true"
         }
+        val partnerName = req.partnerName?.trim()?.lowercase()?.ifBlank { null }
+        require(!req.partner || partnerName != null) { "partnerName is required when partner is true" }
+        require(partnerName == null || partnerName.length <= Coupon.MAX_PARTNER_NAME) {
+            "partnerName must be at most ${Coupon.MAX_PARTNER_NAME} characters"
+        }
         val coupon = Coupon(
             code = req.code.trim().uppercase(),
             razorpayOfferId = offerId,
             fullDiscount = req.fullDiscount,
+            partner = req.partner,
+            partnerName = if (req.partner) partnerName else null,
             description = req.description,
             discountType = req.discountType?.uppercase(),
             discountValue = req.discountValue,
@@ -65,6 +72,8 @@ class AdminCouponController(
         code = code,
         razorpayOfferId = razorpayOfferId,
         fullDiscount = fullDiscount,
+        partner = partner,
+        partnerName = partnerName,
         description = description,
         discountType = discountType,
         discountValue = discountValue,

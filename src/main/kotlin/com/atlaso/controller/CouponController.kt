@@ -28,6 +28,7 @@ class CouponController(
                 discountMinor = result.discountMinor,
                 finalMinor = result.finalMinor,
                 free = result.free,
+                partnerName = result.partnerName,
                 message = result.message,
             )
         )

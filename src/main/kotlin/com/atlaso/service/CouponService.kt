@@ -16,6 +16,7 @@ data class CouponValidation(
     val finalMinor: Long,       // amountMinor - discountMinor (preview only)
     val free: Boolean,          // full-discount coupon — 100% off, skips the Razorpay flow
     val message: String?,       // reason when invalid
+    val partnerName: String? = null, // B2B co-brand (lowercase) — back cover reads "atlaso x <name>"
 )
 
 /** Thrown when a coupon cannot be applied to an order (create-order path). */
@@ -52,6 +53,7 @@ class CouponService(
             finalMinor = (amountMinor - discount).coerceAtLeast(0),
             free = coupon.fullDiscount,
             message = null,
+            partnerName = coupon.partnerNameOrNull(),
         )
     }
 
@@ -123,3 +125,7 @@ class CouponService(
         return capped.coerceIn(0, amountMinor)
     }
 }
+
+/** The coupon's co-brand if it's an active partner coupon, normalised to lowercase. */
+fun Coupon.partnerNameOrNull(): String? =
+    if (partner) partnerName?.trim()?.lowercase()?.ifBlank { null } else null

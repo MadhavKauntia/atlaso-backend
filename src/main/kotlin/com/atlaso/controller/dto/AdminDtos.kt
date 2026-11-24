@@ -31,6 +31,9 @@ data class AdminOrderDto(
     val pincode: String?,
     val country: String?,
     val phone: String?,
+    val couponCode: String?,
+    /** B2B co-brand — back cover reads "atlaso x <partnerName>". */
+    val partnerName: String?,
 ) {
     companion object {
         fun from(o: Order) = AdminOrderDto(
@@ -58,6 +61,8 @@ data class AdminOrderDto(
             pincode = o.pincode,
             country = o.shipCountry,
             phone = o.phone,
+            couponCode = o.couponCode,
+            partnerName = o.partnerName,
         )
     }
 }

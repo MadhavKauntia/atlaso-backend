@@ -12,6 +12,8 @@ data class ValidateCouponResponse(
     val discountMinor: Long,
     val finalMinor: Long,
     val free: Boolean = false,
+    /** Lowercase partner co-brand for B2B coupons — the back cover reads "atlaso x <partnerName>". */
+    val partnerName: String? = null,
     val message: String? = null,
 )
 
@@ -22,6 +24,10 @@ data class CreateCouponRequest(
     val razorpayOfferId: String? = null,
     /** 100%-off coupon that skips the Razorpay flow entirely. */
     val fullDiscount: Boolean = false,
+    /** Partner (B2B) coupon — requires [partnerName]. Independent of [fullDiscount]. */
+    val partner: Boolean = false,
+    /** Co-brand for the back cover; lowercased, max 16 chars. Required when [partner]. */
+    val partnerName: String? = null,
     val description: String? = null,
     val discountType: String? = null,   // PERCENT | FLAT
     val discountValue: Long? = null,
@@ -39,6 +45,8 @@ data class AdminCouponDto(
     val code: String,
     val razorpayOfferId: String?,
     val fullDiscount: Boolean,
+    val partner: Boolean,
+    val partnerName: String?,
     val description: String?,
     val discountType: String?,
     val discountValue: Long?,

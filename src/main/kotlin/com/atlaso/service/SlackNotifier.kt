@@ -45,9 +45,10 @@ class SlackNotifier(
         ).joinToString(", ").ifBlank { "—" }
         val who = order.customerName?.takeIf { it.isNotBlank() } ?: order.customerEmail ?: "—"
         val coupon = order.couponCode?.takeIf { it.isNotBlank() }?.let { " · coupon $it" } ?: ""
+        val partner = order.partnerName?.takeIf { it.isNotBlank() }?.let { " · :handshake: B2B atlaso x $it" } ?: ""
         post(
             ordersWebhookUrl,
-            ":moneybag: New order ATL-${order.number} — ${formatRupees(order.amountMinor)} × ${order.quantity} — $who ($where)$coupon",
+            ":moneybag: New order ATL-${order.number} — ${formatRupees(order.amountMinor)} × ${order.quantity} — $who ($where)$coupon$partner",
         )
     }
 

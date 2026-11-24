@@ -31,6 +31,14 @@ data class Coupon(
     @Column(name = "full_discount", nullable = false)
     val fullDiscount: Boolean = false,
 
+    /** Partner (B2B) coupon: the back cover reads "atlaso x [partnerName]". Independent of [fullDiscount]. */
+    @Column(nullable = false)
+    val partner: Boolean = false,
+
+    /** Lowercase co-brand name (max [MAX_PARTNER_NAME] chars). Set iff [partner]. */
+    @Column(name = "partner_name", length = 16)
+    val partnerName: String? = null,
+
     @Column(length = 255)
     val description: String? = null,
 
@@ -69,4 +77,8 @@ data class Coupon(
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     val createdAt: Instant? = null,
-)
+) {
+    companion object {
+        const val MAX_PARTNER_NAME = 16
+    }
+}

@@ -86,6 +86,10 @@ data class Order(
     @Column(name = "discount_minor")
     val discountMinor: Long? = null,
 
+    /** Partner (B2B) co-brand from the coupon, lowercase — printed as "atlaso x <name>" on the back cover. */
+    @Column(name = "partner_name", length = 16)
+    val partnerName: String? = null,
+
     @Column(nullable = false, length = 32)
     var status: String = "PAID",
 
