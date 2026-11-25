@@ -4,16 +4,9 @@ import com.atlaso.domain.book.Book
 import com.atlaso.domain.book.BookStatus
 import com.atlaso.repository.BookRepository
 import com.atlaso.repository.PhotoRepository
-import org.apache.pdfbox.pdmodel.PDDocument
-import org.apache.pdfbox.pdmodel.PDPage
-import org.apache.pdfbox.pdmodel.PDPageContentStream
-import org.apache.pdfbox.pdmodel.common.PDRectangle
-import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 import java.util.UUID
 
 @Service
@@ -24,6 +17,7 @@ class PdfExportService(
     private val photoRepository: PhotoRepository,
     private val storageService: StorageService,
     private val pdfRenderer: PdfRenderer,
+    private val printPdfStore: PrintPdfStore,
 ) {
     private val logger = LoggerFactory.getLogger(PdfExportService::class.java)
 
@@ -83,19 +77,18 @@ class PdfExportService(
                 )
             }
 
-            val contentPdfBytes = pdfRenderer.render(
+            // One print-ready file: front cover, interior pages, back cover.
+            val printPdf = pdfRenderer.renderPrintBook(
                 title = book.title,
                 subtitle = book.subtitle,
-                pages = pageRenderDataList
+                pages = pageRenderDataList,
+                frontCoverPng = coverPng,
+                backCoverPng = backPng
             )
+            val key = printPdfStore.save(bookId, printPdf)
+            logger.info("Saved print PDF for book {} ({} interior pages, {} bytes)", bookId, pageRenderDataList.size, printPdf.size)
 
-            val coverPdfBytes = buildCoverPdf(book, coverPng, backPng)
-
-            storageService.store("pdfs/${bookId}/cover.pdf", ByteArrayInputStream(coverPdfBytes), "application/pdf")
-            storageService.store("pdfs/${bookId}/photobook.pdf", ByteArrayInputStream(contentPdfBytes), "application/pdf")
-            logger.info("Saved cover and photobook PDFs for book {}", bookId)
-
-            book.pdfUrl = "pdfs/${bookId}/photobook.pdf"
+            book.pdfUrl = key
             book.status = BookStatus.PDF_READY
             return bookRepository.save(book)
         } catch (e: Exception) {
@@ -103,39 +96,6 @@ class PdfExportService(
             book.status = BookStatus.FAILED
             bookRepository.save(book)
             throw e
-        }
-    }
-
-    /**
-     * Cover PDF: page 1 = front cover, page 2 = hardcover back (same bg colour as the
-     * cover with the atlaso wordmark + URL). Both pages are client-rendered PNGs. When
-     * no client cover is supplied we fall back to the simple single-page text cover.
-     */
-    private fun buildCoverPdf(book: Book, coverPng: ByteArray?, backPng: ByteArray?): ByteArray {
-        if (coverPng == null) {
-            return pdfRenderer.renderCover(book.title, book.subtitle)
-        }
-        val document = PDDocument()
-        try {
-            addPngPage(document, coverPng, "cover")
-            if (backPng != null) addPngPage(document, backPng, "back")
-            val out = ByteArrayOutputStream()
-            document.save(out)
-            return out.toByteArray()
-        } finally {
-            document.close()
-        }
-    }
-
-    /** Adds a full-bleed PNG page (trim size = the interior page size) to the document. */
-    private fun addPngPage(document: PDDocument, pngBytes: ByteArray, name: String) {
-        val image = PDImageXObject.createFromByteArray(document, pngBytes, name)
-        val pageW = PdfRenderer.PAGE_WIDTH
-        val pageH = PdfRenderer.PAGE_HEIGHT
-        val page = PDPage(PDRectangle(pageW, pageH))
-        document.addPage(page)
-        PDPageContentStream(document, page).use { cs ->
-            cs.drawImage(image, 0f, 0f, pageW, pageH)
         }
     }
 
@@ -147,7 +107,7 @@ class PdfExportService(
             throw IllegalStateException("PDF is not available for book $bookId")
         }
 
-        val bytes = storageService.load("pdfs/${bookId}/photobook.pdf")
+        val bytes = printPdfStore.load(book)
         val filename = "${book.title.replace(Regex("[^a-zA-Z0-9._-]"), "_")}.pdf"
         return Pair(bytes, filename)
     }

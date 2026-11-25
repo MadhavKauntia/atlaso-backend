@@ -34,8 +34,10 @@ class TripStoragePurger(
         }
         bookRepository.findByTripIdOrderByVersionDesc(tripId).forEach { b ->
             val id = b.id ?: return@forEach
-            keys.add("pdfs/$id/cover.pdf")
-            keys.add("pdfs/$id/photobook.pdf")
+            keys.add(PrintPdfStore.key(id))
+            // Books exported before the single-file PDF have these two instead.
+            keys.add(PrintPdfStore.legacyCoverKey(id))
+            keys.add(PrintPdfStore.legacyInteriorKey(id))
         }
         return keys
     }

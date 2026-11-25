@@ -54,10 +54,31 @@ class PdfRenderer {
         private const val DECODE_BACKOFF_MS = 100L
     }
 
-    fun renderCover(title: String, subtitle: String?): ByteArray {
+    /**
+     * Renders the single print-ready PDF: page 1 = front cover, then every interior page, then the
+     * back cover as the last page. Everything goes into one document in one pass, so export needs
+     * no extra memory for merging. Cover pages are full-bleed client-rendered PNGs at trim size.
+     * Without a client front cover, a simple text cover is used and there is no back page (the
+     * same fallback the old separate cover PDF had).
+     */
+    fun renderPrintBook(
+        title: String,
+        subtitle: String?,
+        pages: List<PageRenderData>,
+        frontCoverPng: ByteArray?,
+        backCoverPng: ByteArray?
+    ): ByteArray {
         val document = PDDocument()
         try {
-            renderCoverPage(document, title, subtitle)
+            if (frontCoverPng != null) addFullBleedImagePage(document, frontCoverPng, "front-cover")
+            else renderCoverPage(document, title, subtitle)
+
+            for (page in pages) {
+                renderContentPage(document, page)
+            }
+
+            if (frontCoverPng != null && backCoverPng != null) addFullBleedImagePage(document, backCoverPng, "back-cover")
+
             val output = ByteArrayOutputStream()
             document.save(output)
             return output.toByteArray()
@@ -66,22 +87,13 @@ class PdfRenderer {
         }
     }
 
-    fun render(
-        title: String,
-        subtitle: String?,
-        pages: List<PageRenderData>
-    ): ByteArray {
-        val document = PDDocument()
-        try {
-            for (page in pages) {
-                renderContentPage(document, page)
-            }
-
-            val output = ByteArrayOutputStream()
-            document.save(output)
-            return output.toByteArray()
-        } finally {
-            document.close()
+    /** Adds a page at trim size with [pngBytes] drawn edge to edge. */
+    private fun addFullBleedImagePage(document: PDDocument, pngBytes: ByteArray, name: String) {
+        val image = PDImageXObject.createFromByteArray(document, pngBytes, name)
+        val page = PDPage(PDRectangle(PAGE_WIDTH, PAGE_HEIGHT))
+        document.addPage(page)
+        PDPageContentStream(document, page).use { cs ->
+            cs.drawImage(image, 0f, 0f, PAGE_WIDTH, PAGE_HEIGHT)
         }
     }
 
