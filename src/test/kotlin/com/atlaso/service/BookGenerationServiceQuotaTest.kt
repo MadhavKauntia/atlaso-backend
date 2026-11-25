@@ -152,4 +152,24 @@ class BookGenerationServiceQuotaTest {
         verify(bookRepository).markFailedIfGenerating(v1.id!!, BookStatus.GENERATING, BookStatus.FAILED)
         verifyNoInteractions(userRepository)
     }
+
+    @Test
+    fun `a new book takes the cover saved on the trip when the client sends none`() {
+        val t = trip(chargedAt = Instant.now()).copy(coverCountry = "bali", coverPaletteId = "#1d3557", coverSubtitle = "Honeymoon 2026")
+        whenever(tripService.getTrip(tripId, userId)).thenReturn(t)
+        whenever(tripRepository.findByIdForUpdate(tripId)).thenReturn(Optional.of(t))
+        whenever(bookRepository.findByTripIdOrderByVersionDesc(tripId)).thenReturn(emptyList())
+        whenever(bookRepository.save(any<Book>())).thenAnswer { (it.arguments[0] as Book).copy(id = UUID.randomUUID()) }
+
+        val book = service.startGeneration(tripId, userId)
+        assertEquals("bali", book.coverCountry)
+        assertEquals("#1d3557", book.coverPaletteId) // the chosen background now reaches the book
+        assertEquals("Honeymoon 2026", book.subtitle)
+
+        // What the client sends still wins.
+        whenever(bookRepository.findByTripIdOrderByVersionDesc(tripId)).thenReturn(emptyList())
+        val sent = service.startGeneration(tripId, userId, coverCountry = "japan", subtitle = "Spring")
+        assertEquals("japan", sent.coverCountry)
+        assertEquals("Spring", sent.subtitle)
+    }
 }

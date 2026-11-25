@@ -12,6 +12,9 @@ import java.security.SecureRandom
 import java.util.Base64
 import java.util.UUID
 
+/** Placeholder name a trip has until the user titles its cover. */
+const val UNTITLED = "Untitled Trip"
+
 class TripNotFoundException(id: UUID) : RuntimeException("Trip not found: $id")
 
 /** Thrown when a guest operation is attempted without the trip's capability token. */
@@ -141,6 +144,23 @@ class TripService(
         val trip = getTrip(id, userId)
         name?.let { trip.name = it }
         destination?.let { trip.destination = it }
+        return tripRepository.save(trip)
+    }
+
+    /**
+     * Saves the cover step's choices on the trip (guest token or owner JWT, like uploads), so an
+     * unfinished trip shows its name and cover everywhere. A blank title keeps the placeholder name.
+     */
+    fun updateCover(
+        id: UUID, userId: UUID?, guestToken: String?,
+        title: String?, country: String?, subtitle: String?, paletteId: String?
+    ): Trip {
+        assertTripAccess(id, userId, guestToken)
+        val trip = getTrip(id)
+        trip.name = title?.trim()?.takeIf { it.isNotEmpty() }?.take(255) ?: UNTITLED
+        trip.coverCountry = country?.trim()?.takeIf { it.isNotEmpty() }?.take(64)
+        trip.coverSubtitle = subtitle?.trim()?.takeIf { it.isNotEmpty() }?.take(255)
+        trip.coverPaletteId = paletteId?.trim()?.takeIf { it.isNotEmpty() }?.take(64)
         return tripRepository.save(trip)
     }
 

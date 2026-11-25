@@ -104,4 +104,26 @@ class TripServiceTest {
         val (trip, _) = svc.createTrip("Trip", null, userId)
         assertNull(trip.user)
     }
+
+    @Test
+    fun `cover choices save on the trip with the guest token or the owner, and nobody else`() {
+        val (trip, token) = newTrip()
+        val saved = svc.updateCover(trip.id!!, null, token, "  Our honeymoon ", "bali", "", "#1d3557")
+        assertEquals("Our honeymoon", saved.name)
+        assertEquals("bali", saved.coverCountry)
+        assertNull(saved.coverSubtitle) // blank → null
+        assertEquals("#1d3557", saved.coverPaletteId)
+
+        // A blank title keeps the placeholder name.
+        assertEquals(UNTITLED, svc.updateCover(trip.id!!, null, token, "", "japan", null, null).name)
+
+        assertThrows(GuestTokenException::class.java) { svc.updateCover(trip.id!!, null, "wrong", "x", null, null, null) }
+        assertThrows(GuestTokenException::class.java) { svc.updateCover(trip.id!!, UUID.randomUUID(), null, "x", null, null, null) }
+
+        val ownerId = UUID.randomUUID()
+        trip.user = User(id = ownerId, googleSub = "g", email = "o@x.com", name = "Owner")
+        trip.guestTokenHash = null // claimed
+        assertEquals("Greece", svc.updateCover(trip.id!!, ownerId, null, "Greece", "greece", null, null).name)
+        assertThrows(GuestTokenException::class.java) { svc.updateCover(trip.id!!, null, token, "x", null, null, null) }
+    }
 }

@@ -87,10 +87,12 @@ class BookGenerationService(
                 trip = trip,
                 version = (latest?.version ?: 0) + 1,
                 title = trip.name,
-                subtitle = subtitle?.takeIf { it.isNotBlank() } ?: trip.destination,
+                subtitle = subtitle?.takeIf { it.isNotBlank() } ?: trip.coverSubtitle ?: trip.destination,
                 status = BookStatus.GENERATING,
-                coverCountry = coverCountry?.takeIf { it.isNotBlank() }
-            )
+                // The client sends its cover; the one saved on the trip at the cover step covers a
+                // client that doesn't have it (another device).
+                coverCountry = coverCountry?.takeIf { it.isNotBlank() } ?: trip.coverCountry
+            ).also { it.coverPaletteId = trip.coverPaletteId }
         )
         val bookId = book.id!!
         // Only kick off the worker once this book row is actually committed, so the

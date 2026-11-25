@@ -22,6 +22,9 @@ data class TripResponse(
     val status: TripStatus,
     val createdAt: Instant?,
     val updatedAt: Instant?,
+    val coverCountry: String? = null,
+    val coverPaletteId: String? = null,
+    val coverSubtitle: String? = null,
     // Only present in the create-trip response — the client keeps it and sends it as the
     // X-Guest-Token header for subsequent guest operations (upload/claim). Never re-served.
     val guestToken: String? = null
@@ -35,9 +38,20 @@ data class TripResponse(
             endDate = trip.endDate,
             status = trip.status,
             createdAt = trip.createdAt,
-            updatedAt = trip.updatedAt
+            updatedAt = trip.updatedAt,
+            coverCountry = trip.coverCountry,
+            coverPaletteId = trip.coverPaletteId,
+            coverSubtitle = trip.coverSubtitle
         )
 
         fun from(trip: Trip, guestToken: String?): TripResponse = from(trip).copy(guestToken = guestToken)
     }
 }
+
+/** The cover step's choices for a trip that doesn't have a book yet. */
+data class UpdateTripCoverRequest(
+    val title: String? = null,
+    val country: String? = null,
+    val subtitle: String? = null,
+    val paletteId: String? = null
+)

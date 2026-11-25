@@ -46,6 +46,8 @@ class SecurityConfig(
                     .requestMatchers(HttpMethod.GET, "/api/trips/*/photos").permitAll()
                     .requestMatchers(HttpMethod.POST, "/api/trips/*/photos/initiate").permitAll()
                     .requestMatchers(HttpMethod.POST, "/api/trips/*/photos/confirm").permitAll()
+                    // Cover step choices (guest token or owner JWT, checked in the service)
+                    .requestMatchers(HttpMethod.PUT, "/api/trips/*/cover").permitAll()
                     // Public image/file access
                     .requestMatchers(HttpMethod.GET, "/api/trips/*/photos/*/image").permitAll()
                     // Book cover for the book-ready email — capability-gated by the book UUID

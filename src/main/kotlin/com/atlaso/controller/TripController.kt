@@ -2,6 +2,7 @@ package com.atlaso.controller
 
 import com.atlaso.controller.dto.CreateTripRequest
 import com.atlaso.controller.dto.TripResponse
+import com.atlaso.controller.dto.UpdateTripCoverRequest
 import com.atlaso.domain.trip.TripStatus
 import com.atlaso.service.TripService
 import org.springframework.http.HttpStatus
@@ -58,6 +59,21 @@ class TripController(
     ): ResponseEntity<TripResponse> {
         val userId = UUID.fromString(jwt.subject)
         val trip = tripService.updateTrip(id, userId, request.name, request.destination)
+        return ResponseEntity.ok(TripResponse.from(trip))
+    }
+
+    // Cover step choices, saved as they're edited. Guest token (before sign-in) or owner JWT.
+    @PutMapping("/{id}/cover")
+    fun updateCover(
+        @PathVariable id: UUID,
+        @RequestBody request: UpdateTripCoverRequest,
+        @RequestHeader(value = "X-Guest-Token", required = false) guestToken: String?,
+        @AuthenticationPrincipal jwt: Jwt?
+    ): ResponseEntity<TripResponse> {
+        val trip = tripService.updateCover(
+            id, jwt?.subject?.let(UUID::fromString), guestToken,
+            request.title, request.country, request.subtitle, request.paletteId
+        )
         return ResponseEntity.ok(TripResponse.from(trip))
     }
 

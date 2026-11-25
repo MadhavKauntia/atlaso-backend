@@ -47,6 +47,17 @@ data class Trip(
     @Column(name = "preview_charged_at")
     var previewChargedAt: Instant? = null,
 
+    // Cover chosen on the cover step, saved as it's edited and copied onto the book at
+    // generation. The cover title is [name].
+    @Column(name = "cover_country", length = 64)
+    var coverCountry: String? = null,
+
+    @Column(name = "cover_palette_id", length = 64)
+    var coverPaletteId: String? = null,
+
+    @Column(name = "cover_subtitle", length = 255)
+    var coverSubtitle: String? = null,
+
     @CreationTimestamp
     @Column(nullable = false, updatable = false, name = "created_at")
     val createdAt: Instant? = null,
