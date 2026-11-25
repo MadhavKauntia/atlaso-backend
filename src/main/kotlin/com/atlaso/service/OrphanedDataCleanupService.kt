@@ -11,7 +11,7 @@ import org.springframework.data.domain.PageRequest
 import org.springframework.data.domain.Sort
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Service
-import org.springframework.transaction.annotation.Transactional
+import org.springframework.transaction.support.TransactionTemplate
 import java.time.Duration
 import java.time.Instant
 
@@ -24,6 +24,9 @@ import java.time.Instant
  * so nothing with generation history or customer value is removed. S3 objects are deleted before the
  * DB rows; if any object delete fails the trip is held for the next run rather than orphaning it.
  *
+ * Each trip's rows are deleted in their own transaction, so one failing trip is logged and skipped
+ * instead of rolling back (and blocking) the whole run.
+ *
  * When [CleanupProperties.enabled] is false the run is a no-op that only logs what it would delete.
  */
 @Service
@@ -35,11 +38,11 @@ class OrphanedDataCleanupService(
     private val orderRepository: OrderRepository,
     private val uploadGrantRepository: UploadGrantRepository,
     private val purger: TripStoragePurger,
+    private val transactionTemplate: TransactionTemplate,
 ) {
     private val logger = LoggerFactory.getLogger(OrphanedDataCleanupService::class.java)
 
     @Scheduled(fixedDelay = 3_600_000L, initialDelay = 600_000L) // hourly, 10 min after start
-    @Transactional
     fun cleanupOrphanedTrips() {
         val now = Instant.now()
         val emptyCutoff = now.minus(Duration.ofHours(props.emptyTripCutoffHours))
@@ -59,6 +62,7 @@ class OrphanedDataCleanupService(
         var protectedSkipped = 0
         var notYetDue = 0
         var retainedForRetry = 0
+        var failed = 0
 
         for (trip in candidates) {
             val tripId = trip.id ?: continue
@@ -97,17 +101,21 @@ class OrphanedDataCleanupService(
             }
             deletedObjects += keys.size
 
-            photoRepository.deleteByTripId(tripId)
-            uploadGrantRepository.deleteByTripId(tripId)
-            tripRepository.delete(trip)
-            deletedTrips++
+            val deleted = runCatching {
+                transactionTemplate.executeWithoutResult {
+                    photoRepository.deleteByTripId(tripId)
+                    uploadGrantRepository.deleteByTripId(tripId)
+                    tripRepository.deleteById(tripId)
+                }
+            }.onFailure { logger.error("Orphaned-trip cleanup: failed to delete rows for trip {}", tripId, it) }
+            if (deleted.isSuccess) deletedTrips++ else failed++
         }
 
         logger.info(
             "Orphaned-trip cleanup (enabled={}): candidates={} deletedTrips={} deletedObjects={} " +
-                "wouldDelete={} protectedSkipped={} notYetDue={} retainedForRetry={}",
+                "wouldDelete={} protectedSkipped={} notYetDue={} retainedForRetry={} failed={}",
             props.enabled, candidates.size, deletedTrips, deletedObjects,
-            wouldDelete, protectedSkipped, notYetDue, retainedForRetry
+            wouldDelete, protectedSkipped, notYetDue, retainedForRetry, failed
         )
     }
 }

@@ -24,16 +24,13 @@ class TripStoragePurger(
     /** Every S3 key associated with [tripId]. Deduplicated (a consumed grant shares its photo's key). */
     fun keysForTrip(tripId: UUID): Set<String> {
         val keys = linkedSetOf<String>()
-        photoRepository.findByTripId(tripId).forEach { p ->
-            keys.add(p.storageKey)
-            p.thumbnailKey?.let(keys::add)
+        // Key-only queries: loading Photo/Book entities here left them managed and pointing at the
+        // trip, so deleting the trip made the next flush throw TransientObjectException.
+        (photoRepository.findStorageKeysByTripId(tripId) + uploadGrantRepository.findStorageKeysByTripId(tripId)).forEach { k ->
+            keys.add(k.storageKey)
+            k.thumbnailKey?.let(keys::add)
         }
-        uploadGrantRepository.findByTripId(tripId).forEach { g ->
-            keys.add(g.storageKey)
-            g.thumbnailKey?.let(keys::add)
-        }
-        bookRepository.findByTripIdOrderByVersionDesc(tripId).forEach { b ->
-            val id = b.id ?: return@forEach
+        bookRepository.findIdsByTripId(tripId).forEach { id ->
             keys.add(PrintPdfStore.key(id))
             // Books exported before the single-file PDF have these two instead.
             keys.add(PrintPdfStore.legacyCoverKey(id))

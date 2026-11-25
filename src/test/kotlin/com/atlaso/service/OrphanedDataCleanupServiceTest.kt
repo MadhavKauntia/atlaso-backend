@@ -9,12 +9,16 @@ import com.atlaso.repository.TripRepository
 import com.atlaso.repository.UploadGrantRepository
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.springframework.data.domain.Pageable
+import org.springframework.transaction.PlatformTransactionManager
+import org.springframework.transaction.support.SimpleTransactionStatus
+import org.springframework.transaction.support.TransactionTemplate
 import java.time.Duration
 import java.time.Instant
 import java.util.UUID
@@ -27,10 +31,13 @@ class OrphanedDataCleanupServiceTest {
     private val orderRepo = mock<OrderRepository>()
     private val grantRepo = mock<UploadGrantRepository>()
     private val purger = mock<TripStoragePurger>()
+    private val txManager = mock<PlatformTransactionManager> {
+        on { getTransaction(any()) } doReturn SimpleTransactionStatus()
+    }
 
     private fun service(enabled: Boolean = true) = OrphanedDataCleanupService(
         CleanupProperties(enabled = enabled, photoTripCutoffHours = 168, emptyTripCutoffHours = 72, batchSize = 200),
-        tripRepo, photoRepo, bookRepo, orderRepo, grantRepo, purger,
+        tripRepo, photoRepo, bookRepo, orderRepo, grantRepo, purger, TransactionTemplate(txManager),
     )
 
     private fun trip(ageHours: Long): Trip =
@@ -51,7 +58,7 @@ class OrphanedDataCleanupServiceTest {
         val t = trip(ageHours = 100) // > 72h empty cutoff
         candidates(t)
         service().cleanupOrphanedTrips()
-        verify(tripRepo).delete(t)
+        verify(tripRepo).deleteById(t.id!!)
         verify(photoRepo).deleteByTripId(t.id!!)
         verify(grantRepo).deleteByTripId(t.id!!)
     }
@@ -62,7 +69,7 @@ class OrphanedDataCleanupServiceTest {
         candidates(t)
         whenever(photoRepo.countByTripId(t.id!!)).thenReturn(5L)
         service().cleanupOrphanedTrips()
-        verify(tripRepo, never()).delete(any())
+        verify(tripRepo, never()).deleteById(any())
         verify(purger, never()).purge(any(), any())
     }
 
@@ -72,7 +79,7 @@ class OrphanedDataCleanupServiceTest {
         candidates(t)
         whenever(photoRepo.countByTripId(t.id!!)).thenReturn(5L)
         service().cleanupOrphanedTrips()
-        verify(tripRepo).delete(t)
+        verify(tripRepo).deleteById(t.id!!)
     }
 
     @Test
@@ -81,7 +88,7 @@ class OrphanedDataCleanupServiceTest {
         candidates(t)
         whenever(orderRepo.existsByTripId(t.id!!)).thenReturn(true)
         service().cleanupOrphanedTrips()
-        verify(tripRepo, never()).delete(any())
+        verify(tripRepo, never()).deleteById(any())
     }
 
     @Test
@@ -90,7 +97,7 @@ class OrphanedDataCleanupServiceTest {
         candidates(t)
         whenever(bookRepo.existsByTripId(t.id!!)).thenReturn(true)
         service().cleanupOrphanedTrips()
-        verify(tripRepo, never()).delete(any())
+        verify(tripRepo, never()).deleteById(any())
     }
 
     @Test
@@ -99,7 +106,7 @@ class OrphanedDataCleanupServiceTest {
         candidates(t)
         whenever(purger.purge(any(), any())).thenReturn(false) // an S3 delete failed
         service().cleanupOrphanedTrips()
-        verify(tripRepo, never()).delete(any())
+        verify(tripRepo, never()).deleteById(any())
     }
 
     @Test
@@ -107,7 +114,17 @@ class OrphanedDataCleanupServiceTest {
         val t = trip(ageHours = 500)
         candidates(t)
         service(enabled = false).cleanupOrphanedTrips()
-        verify(tripRepo, never()).delete(any())
+        verify(tripRepo, never()).deleteById(any())
         verify(purger, never()).purge(any(), any())
+    }
+
+    @Test
+    fun `a trip whose row delete fails does not stop the rest`() {
+        val bad = trip(ageHours = 300)
+        val good = trip(ageHours = 200)
+        candidates(bad, good)
+        whenever(tripRepo.deleteById(bad.id!!)).thenThrow(RuntimeException("boom"))
+        service().cleanupOrphanedTrips()
+        verify(tripRepo).deleteById(good.id!!)
     }
 }

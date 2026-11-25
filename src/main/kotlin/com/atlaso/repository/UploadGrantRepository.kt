@@ -12,8 +12,12 @@ import java.util.UUID
 interface UploadGrantRepository : JpaRepository<UploadGrant, UUID> {
     fun findByPhotoIdAndTripId(photoId: UUID, tripId: UUID): UploadGrant?
 
-    /** All grant rows for a trip — used to collect their S3 keys during trip cleanup. */
+    /** All grant rows for a trip. */
     fun findByTripId(tripId: UUID): List<UploadGrant>
+
+    /** S3 keys of a trip's grants, without loading the entities (see [StorageKeys]). */
+    @Query("SELECT g.storageKey AS storageKey, g.thumbnailKey AS thumbnailKey FROM UploadGrant g WHERE g.tripId = :tripId")
+    fun findStorageKeysByTripId(@Param("tripId") tripId: UUID): List<StorageKeys>
 
     /** Bulk-remove a trip's grant rows (their S3 objects are deleted separately first). */
     @Modifying

@@ -11,6 +11,11 @@ import java.util.UUID
 
 interface BookRepository : JpaRepository<Book, UUID> {
     fun findByTripIdOrderByVersionDesc(tripId: UUID): List<Book>
+
+    /** Ids of a trip's books, without loading the entities. */
+    @Query("SELECT b.id FROM Book b WHERE b.trip.id = :tripId")
+    fun findIdsByTripId(@Param("tripId") tripId: UUID): List<UUID>
+
     fun findByIdAndTripUserId(id: UUID, userId: UUID): Optional<Book>
 
     /** True once a trip has any book — used to lock further photo uploads for that trip. */

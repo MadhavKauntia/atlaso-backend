@@ -15,6 +15,10 @@ interface PhotoRepository : JpaRepository<Photo, UUID> {
     fun countByTripId(tripId: UUID): Long
     fun findByIdAndTripId(id: UUID, tripId: UUID): Optional<Photo>
 
+    /** S3 keys of a trip's photos, without loading the entities (see [StorageKeys]). */
+    @Query("SELECT p.storageKey AS storageKey, p.thumbnailKey AS thumbnailKey FROM Photo p WHERE p.trip.id = :tripId")
+    fun findStorageKeysByTripId(@Param("tripId") tripId: UUID): List<StorageKeys>
+
     /** Bulk-remove a trip's photo rows (S3 objects are deleted separately first). */
     @Modifying
     @Query("DELETE FROM Photo p WHERE p.trip.id = :tripId")
