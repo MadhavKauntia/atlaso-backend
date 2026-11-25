@@ -2,6 +2,8 @@ package com.atlaso.service
 
 import com.atlaso.config.CleanupProperties
 import com.atlaso.domain.trip.Trip
+import com.atlaso.domain.trip.TripStatus
+import com.atlaso.domain.user.User
 import com.atlaso.repository.BookRepository
 import com.atlaso.repository.OrderRepository
 import com.atlaso.repository.PhotoRepository
@@ -126,5 +128,43 @@ class OrphanedDataCleanupServiceTest {
         whenever(tripRepo.deleteById(bad.id!!)).thenThrow(RuntimeException("boom"))
         service().cleanupOrphanedTrips()
         verify(tripRepo).deleteById(good.id!!)
+    }
+
+    private fun ownedEmpty(vararg trips: Trip) {
+        whenever(tripRepo.findByUserIsNotNullAndStatusAndCreatedAtBefore(eq(TripStatus.CREATED), any(), any<Pageable>()))
+            .thenReturn(trips.toList())
+    }
+
+    private fun ownedTrip(ageHours: Long): Trip =
+        trip(ageHours).also { it.user = User(id = UUID.randomUUID(), googleSub = "g", email = "u@x.com", name = "U") }
+
+    @Test
+    fun `empty owned trip past the empty window is deleted`() {
+        val t = ownedTrip(ageHours = 100)
+        candidates()
+        ownedEmpty(t)
+        service().cleanupOrphanedTrips()
+        verify(tripRepo).deleteById(t.id!!)
+    }
+
+    @Test
+    fun `owned trip with photos is never deleted, however old`() {
+        val t = ownedTrip(ageHours = 10_000)
+        candidates()
+        ownedEmpty(t) // e.g. photos arrived but status somehow still CREATED
+        whenever(photoRepo.countByTripId(t.id!!)).thenReturn(3L)
+        service().cleanupOrphanedTrips()
+        verify(tripRepo, never()).deleteById(any())
+        verify(purger, never()).purge(any(), any())
+    }
+
+    @Test
+    fun `owned empty trip with a book is kept`() {
+        val t = ownedTrip(ageHours = 100)
+        candidates()
+        ownedEmpty(t)
+        whenever(bookRepo.existsByTripId(t.id!!)).thenReturn(true)
+        service().cleanupOrphanedTrips()
+        verify(tripRepo, never()).deleteById(any())
     }
 }

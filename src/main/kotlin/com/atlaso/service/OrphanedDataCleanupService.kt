@@ -1,6 +1,7 @@
 package com.atlaso.service
 
 import com.atlaso.config.CleanupProperties
+import com.atlaso.domain.trip.TripStatus
 import com.atlaso.repository.BookRepository
 import com.atlaso.repository.OrderRepository
 import com.atlaso.repository.PhotoRepository
@@ -20,7 +21,11 @@ import java.time.Instant
  *   - a guest uploads photos but never signs in to continue (unclaimed trip WITH photos), and
  *   - a guest starts a book but never uploads (unclaimed trip with NO photos).
  *
- * Only ever touches UNCLAIMED trips (`user IS NULL`). A trip is skipped if it has any book or order,
+ *   - a signed-in user starts a book but never uploads (OWNED trip still CREATED, with NO photos).
+ *     Signed-in users own a trip from creation, so these would otherwise pile up in their account.
+ *
+ * Owned trips are only ever removed when they hold nothing: no photos, no book, no order. Otherwise it
+ * only touches UNCLAIMED trips (`user IS NULL`). A trip is skipped if it has any book or order,
  * so nothing with generation history or customer value is removed. S3 objects are deleted before the
  * DB rows; if any object delete fails the trip is held for the next run rather than orphaning it.
  *
@@ -53,6 +58,9 @@ class OrphanedDataCleanupService(
         val candidates = tripRepository.findByUserIsNullAndCreatedAtBefore(
             emptyCutoff, PageRequest.of(0, props.batchSize, Sort.by("createdAt").ascending())
         )
+        val ownedEmpty = tripRepository.findByUserIsNotNullAndStatusAndCreatedAtBefore(
+            TripStatus.CREATED, emptyCutoff, PageRequest.of(0, props.batchSize, Sort.by("createdAt").ascending())
+        )
         // Fall through even when empty so every run logs a summary — a heartbeat for a job that
         // deletes data. An empty run is the common case and just reports candidates=0.
 
@@ -64,7 +72,7 @@ class OrphanedDataCleanupService(
         var retainedForRetry = 0
         var failed = 0
 
-        for (trip in candidates) {
+        for (trip in candidates + ownedEmpty) {
             val tripId = trip.id ?: continue
             val createdAt = trip.createdAt ?: continue
 
@@ -77,7 +85,9 @@ class OrphanedDataCleanupService(
             val photoCount = photoRepository.countByTripId(tripId)
             // Empty trips are already past emptyCutoff (the query cutoff); trips with photos must also
             // be past the longer photo window before we delete them.
-            val due = photoCount == 0L || createdAt.isBefore(photoCutoff)
+            // An owned trip is the user's: only ever remove it while it's completely empty.
+            val owned = trip.user != null
+            val due = photoCount == 0L || (!owned && createdAt.isBefore(photoCutoff))
             if (!due) {
                 notYetDue++
                 continue
@@ -87,8 +97,8 @@ class OrphanedDataCleanupService(
 
             if (!props.enabled) {
                 logger.info(
-                    "[cleanup dry-run] would delete unclaimed trip {} (created {}, {} photos, {} S3 objects)",
-                    tripId, createdAt, photoCount, keys.size
+                    "[cleanup dry-run] would delete {} trip {} (created {}, {} photos, {} S3 objects)",
+                    if (owned) "empty owned" else "unclaimed", tripId, createdAt, photoCount, keys.size
                 )
                 wouldDelete++
                 continue
@@ -114,7 +124,7 @@ class OrphanedDataCleanupService(
         logger.info(
             "Orphaned-trip cleanup (enabled={}): candidates={} deletedTrips={} deletedObjects={} " +
                 "wouldDelete={} protectedSkipped={} notYetDue={} retainedForRetry={} failed={}",
-            props.enabled, candidates.size, deletedTrips, deletedObjects,
+            props.enabled, candidates.size + ownedEmpty.size, deletedTrips, deletedObjects,
             wouldDelete, protectedSkipped, notYetDue, retainedForRetry, failed
         )
     }

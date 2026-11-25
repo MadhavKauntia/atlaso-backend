@@ -40,6 +40,7 @@ class TripServiceTest {
     fun `guest access is rejected on a claimed trip`() {
         val (trip, token) = newTrip()
         trip.user = User(id = UUID.randomUUID(), googleSub = "g", email = "o@x.com", name = "Owner")
+        trip.guestTokenHash = null // a real claim revokes the token
         assertThrows(GuestTokenException::class.java) { svc.assertTripAccess(trip.id!!, null, token) }
     }
 
@@ -52,6 +53,7 @@ class TripServiceTest {
         // Claimed: only the owner's user id is allowed.
         val ownerId = UUID.randomUUID()
         trip.user = User(id = ownerId, googleSub = "g", email = "o@x.com", name = "Owner")
+        trip.guestTokenHash = null // a real claim revokes the token
         svc.assertTripAccess(trip.id!!, ownerId, null)
         assertThrows(GuestTokenException::class.java) { svc.assertTripAccess(trip.id!!, UUID.randomUUID(), null) }
         assertThrows(GuestTokenException::class.java) { svc.assertTripAccess(trip.id!!, null, token) }
@@ -68,5 +70,38 @@ class TripServiceTest {
         val claimed = svc.claimTrip(trip.id!!, userId, token)
         assertEquals(userId, claimed.user?.id)
         assertNull(claimed.guestTokenHash) // token revoked on claim
+    }
+
+    @Test
+    fun `a signed-in creator owns the trip from the start`() {
+        val userId = UUID.randomUUID()
+        val user = User(id = userId, googleSub = "g", email = "u@x.com", name = "U")
+        whenever(userRepo.findById(userId)).thenReturn(Optional.of(user))
+        whenever(tripRepo.save(any<Trip>())).thenAnswer { (it.arguments[0] as Trip).copy(id = UUID.randomUUID()) }
+        val (trip, token) = svc.createTrip("Trip", null, userId)
+        whenever(tripRepo.findById(trip.id!!)).thenReturn(Optional.of(trip))
+
+        assertEquals(userId, trip.user?.id)
+        assertNotNull(trip.guestTokenHash)
+        svc.assertTripAccess(trip.id!!, userId, null)  // owner JWT
+        svc.assertTripAccess(trip.id!!, null, token)   // phone with the guest token, no sign-in
+        assertThrows(GuestTokenException::class.java) { svc.assertTripAccess(trip.id!!, null, "wrong") }
+        assertThrows(GuestTokenException::class.java) { svc.assertTripAccess(trip.id!!, UUID.randomUUID(), null) }
+
+        // Build time: claim by the owner retires the guest token.
+        val claimed = svc.claimTrip(trip.id!!, userId, token)
+        assertEquals(userId, claimed.user?.id)
+        assertNull(claimed.guestTokenHash)
+        assertThrows(GuestTokenException::class.java) { svc.assertTripAccess(trip.id!!, null, token) }
+        assertThrows(RuntimeException::class.java) { svc.claimTrip(trip.id!!, UUID.randomUUID(), token) }
+    }
+
+    @Test
+    fun `an unknown user id falls back to a guest trip`() {
+        val userId = UUID.randomUUID()
+        whenever(userRepo.findById(userId)).thenReturn(Optional.empty())
+        whenever(tripRepo.save(any<Trip>())).thenAnswer { (it.arguments[0] as Trip).copy(id = UUID.randomUUID()) }
+        val (trip, _) = svc.createTrip("Trip", null, userId)
+        assertNull(trip.user)
     }
 }

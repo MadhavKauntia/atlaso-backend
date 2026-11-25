@@ -3,8 +3,11 @@ package com.atlaso.service
 import com.atlaso.domain.photo.Photo
 import com.atlaso.domain.photo.PhotoMetadata
 import com.atlaso.domain.trip.Trip
+import com.atlaso.domain.trip.TripStatus
+import com.atlaso.domain.user.User
 import com.atlaso.repository.PhotoRepository
 import com.atlaso.repository.TripRepository
+import com.atlaso.repository.UserRepository
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
@@ -29,11 +32,13 @@ class OrphanedDataCleanupIntegrationTest {
     @Autowired lateinit var cleanup: OrphanedDataCleanupService
     @Autowired lateinit var tripRepository: TripRepository
     @Autowired lateinit var photoRepository: PhotoRepository
+    @Autowired lateinit var userRepository: UserRepository
     @Autowired lateinit var jdbc: JdbcTemplate
 
     @MockitoBean lateinit var storageService: StorageService
 
     private val created = mutableListOf<UUID>()
+    private val users = mutableListOf<UUID>()
 
     @AfterEach
     fun tearDown() {
@@ -41,11 +46,13 @@ class OrphanedDataCleanupIntegrationTest {
             jdbc.update("DELETE FROM photos WHERE trip_id = ?", id)
             jdbc.update("DELETE FROM trips WHERE id = ?", id)
         }
+        users.forEach { jdbc.update("DELETE FROM users WHERE id = ?", it) }
     }
 
     /** An unclaimed guest trip with [photos] photos, backdated by [ageDays]. */
-    private fun guestTrip(photos: Int, ageDays: Int): UUID {
-        val trip = tripRepository.save(Trip(name = "abandoned", user = null))
+    private fun guestTrip(photos: Int, ageDays: Int, owner: User? = null): UUID {
+        val status = if (photos > 0) TripStatus.UPLOADING_PHOTOS else TripStatus.CREATED
+        val trip = tripRepository.save(Trip(name = "abandoned", user = owner, status = status))
         val id = trip.id!!
         created += id
         repeat(photos) { i ->
@@ -86,5 +93,22 @@ class OrphanedDataCleanupIntegrationTest {
         cleanup.cleanupOrphanedTrips()
         assert(tripRepository.existsById(recent))
         assertEquals(2L, photoRepository.countByTripId(recent))
+    }
+
+    @Test
+    fun `removes an empty trip a signed-in user abandoned, keeps their trip with photos`() {
+        val u = UUID.randomUUID().toString()
+        val owner = userRepository.save(User(googleSub = "sub-$u", email = "$u@example.com", name = "Owner"))
+        users += owner.id!!
+        val emptyOwned = guestTrip(photos = 0, ageDays = 10, owner = owner)
+        val ownedWithPhotos = guestTrip(photos = 2, ageDays = 60, owner = owner)
+        val recentEmptyOwned = guestTrip(photos = 0, ageDays = 1, owner = owner)
+
+        cleanup.cleanupOrphanedTrips()
+
+        assertFalse(tripRepository.existsById(emptyOwned), "abandoned empty owned trip should be deleted")
+        assert(tripRepository.existsById(ownedWithPhotos)) { "owned trip with photos must be kept" }
+        assertEquals(2L, photoRepository.countByTripId(ownedWithPhotos))
+        assert(tripRepository.existsById(recentEmptyOwned)) { "recent empty owned trip is not due yet" }
     }
 }

@@ -19,11 +19,15 @@ class TripController(
     private val tripService: TripService
 ) {
 
-    // Public — creates a guest trip with no user attached. Returns a one-time guest token
-    // the client must send (X-Guest-Token) for later guest operations on this trip.
+    // Public. Signed in: the trip is owned by the caller from the start. Guest: no user until
+    // claim. Either way returns a one-time guest token the client sends (X-Guest-Token) for
+    // guest operations on this trip until it's claimed.
     @PostMapping
-    fun createTrip(@RequestBody request: CreateTripRequest): ResponseEntity<TripResponse> {
-        val (trip, guestToken) = tripService.createTrip(request.name, request.destination)
+    fun createTrip(
+        @RequestBody request: CreateTripRequest,
+        @AuthenticationPrincipal jwt: Jwt?
+    ): ResponseEntity<TripResponse> {
+        val (trip, guestToken) = tripService.createTrip(request.name, request.destination, jwt?.subject?.let(UUID::fromString))
         return ResponseEntity.status(HttpStatus.CREATED).body(TripResponse.from(trip, guestToken))
     }
 

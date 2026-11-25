@@ -30,13 +30,17 @@ class TripService(
     private val logger = LoggerFactory.getLogger(TripService::class.java)
     private val secureRandom = SecureRandom()
 
-    // Guest trip — no user yet; claimed later via claimTrip(). Returns the capability token
-    // once; only its hash is stored.
-    fun createTrip(name: String, destination: String?): TripWithToken {
+    // Returns the capability token once; only its hash is stored. A signed-in creator owns the
+    // trip from the start (so it shows in their account and can be resumed on any device); a guest
+    // trip has no user until claimTrip(). Either way the guest token stays valid until the trip is
+    // claimed at "build my photobook", so a phone handed the token can still upload to it.
+    fun createTrip(name: String, destination: String?, userId: UUID? = null): TripWithToken {
         val token = generateGuestToken()
-        val trip = Trip(name = name, destination = destination, user = null, guestTokenHash = hashToken(token))
+        val owner = userId?.let { userRepository.findById(it).orElse(null) }
+        val trip = Trip(name = name, destination = destination, user = owner, guestTokenHash = hashToken(token))
         val saved = tripRepository.save(trip)
-        logger.info("Created guest trip: {} ({})", saved.id, saved.name)
+        if (owner != null) logger.info("Created trip: {} ({}) for user: {}", saved.id, saved.name, owner.id)
+        else logger.info("Created guest trip: {} ({})", saved.id, saved.name)
         return TripWithToken(saved, token)
     }
 
@@ -71,12 +75,14 @@ class TripService(
     fun assertTripAccess(tripId: UUID, userId: UUID?, guestToken: String?) {
         val trip = tripRepository.findById(tripId).orElseThrow { TripNotFoundException(tripId) }
         val owner = trip.user
-        if (owner != null) {
-            if (userId == null || owner.id != userId) throw GuestTokenException("Sign in as the owner to continue")
-        } else {
-            val hash = trip.guestTokenHash ?: throw GuestTokenException("Guest access is not available for this trip")
-            if (!tokenMatches(guestToken, hash)) throw GuestTokenException("Invalid or missing guest token")
-        }
+        if (owner != null && userId != null && owner.id == userId) return
+        // The guest token works until claim revokes it, including on a trip owned from creation
+        // (e.g. the user's phone, which has the token but no sign-in).
+        val hash = trip.guestTokenHash
+        if (hash != null && tokenMatches(guestToken, hash)) return
+        if (owner != null) throw GuestTokenException("Sign in as the owner to continue")
+        if (hash == null) throw GuestTokenException("Guest access is not available for this trip")
+        throw GuestTokenException("Invalid or missing guest token")
     }
 
     // Public lookup by ID — no ownership check (used by guest flow and public endpoints)
@@ -97,7 +103,11 @@ class TripService(
         val existingUser = trip.user
         if (existingUser != null) {
             if (existingUser.id != userId) throw RuntimeException("Trip already belongs to another user")
-            return trip // already claimed by this user
+            // Owned since creation (or claimed before): claiming at build time still retires the
+            // guest token, exactly like claiming a guest trip.
+            if (trip.guestTokenHash == null) return trip
+            trip.guestTokenHash = null
+            return tripRepository.save(trip)
         }
         // Require the matching guest token to claim — a UUID alone can't hijack a trip.
         val hash = trip.guestTokenHash ?: throw GuestTokenException("Guest token required to claim this trip")
