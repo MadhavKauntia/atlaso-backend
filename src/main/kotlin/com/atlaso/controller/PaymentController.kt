@@ -15,6 +15,7 @@ import com.atlaso.service.RazorpayAuthException
 import com.atlaso.service.RazorpayException
 import com.atlaso.service.TripService
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
@@ -34,6 +35,8 @@ class PaymentController(
     private val orderService: OrderService,
     private val couponService: CouponService,
     private val checkoutRepository: CheckoutRepository,
+    /** When true, no new orders (paid or 100%-off) can be started. See application.yml `atlaso.orders.paused`. */
+    @Value("\${atlaso.orders.paused:false}") private val ordersPaused: Boolean = false,
 ) {
     private val logger = LoggerFactory.getLogger(PaymentController::class.java)
 
@@ -46,6 +49,12 @@ class PaymentController(
         @RequestBody request: CreateOrderRequest,
         @AuthenticationPrincipal jwt: Jwt,
     ): ResponseEntity<Any> {
+        // Orders paused: refuse before touching Razorpay or recording anything. Payments already
+        // started (verify + webhook) still complete, so nobody who paid is left without an order.
+        if (ordersPaused) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(mapOf("error" to "We've paused new orders for now. Your book is saved in your account."))
+        }
         val userId = UUID.fromString(jwt.subject)
         // Ownership — you can only pay for your own trip (throws → 404 if not).
         tripService.getTrip(request.tripId, userId)

@@ -73,6 +73,15 @@ class PaymentControllerTest {
         verify(orderService).recordPaidOrder(any(), any())
     }
 
+    @Test
+    fun `refuses new orders while orders are paused, before Razorpay or recording`() {
+        val paused = PaymentController(paymentService, tripService, orderService, couponService, checkoutRepo, ordersPaused = true)
+        val res = paused.createOrder(orderReq(), jwt)
+        assertEquals(503, res.statusCode.value())
+        verify(paymentService, never()).createOrder(any(), any(), any(), any(), any())
+        verify(orderService, never()).recordFreeOrder(any(), any(), any(), any(), any())
+    }
+
     // --- create-order shipping validation ---
 
     private fun orderReq(
